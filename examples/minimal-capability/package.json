@@ -1,0 +1,19 @@
+{
+  "name": "@agent-tool-platform/example-minimal-capability",
+  "version": "0.1.0",
+  "description": "Private fixture capability used to prove the platform runtime. Not a product tool server.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "main": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@agent-tool-platform/runtime": "0.1.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
