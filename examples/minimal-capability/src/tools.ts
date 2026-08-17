@@ -140,6 +140,28 @@ export const waitForCancellation = defineTool({
   },
 });
 
+export const ignoreCancellation = defineTool({
+  name: 'ignore_cancellation',
+  title: 'Ignore cancellation',
+  summary: 'Sleep for the full delay without observing the invocation signal.',
+  description:
+    'Sleep for the requested delay while deliberately ignoring the cancellation signal. Exists so ' +
+    'the bounded shutdown drain can be observed against a handler that misbehaves.',
+  kind: 'read',
+  routing: {
+    useWhen: ['a test needs a handler that does not cooperate with cancellation'],
+    doNotUseWhen: ['you want a well-behaved tool; this one deliberately is not'],
+    changesState: false,
+  },
+  inputSchema: z.object({ delayMs: z.number().int().min(0).max(60_000).default(50) }),
+  outputSchema: z.object({ waitedMs: z.number().int() }),
+  async handler(input) {
+    const startedAt = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, input.delayMs));
+    return { waitedMs: Date.now() - startedAt };
+  },
+});
+
 export const brokenOutput = defineTool({
   name: 'broken_output',
   title: 'Return an invalid result',
@@ -165,5 +187,6 @@ export const minimalTools: readonly AnyToolDefinition<MinimalServices>[] = [
   listNotes,
   putNote,
   waitForCancellation,
+  ignoreCancellation,
   brokenOutput,
 ];

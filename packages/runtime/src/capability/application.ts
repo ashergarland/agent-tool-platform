@@ -3,7 +3,7 @@ import type { Logger } from 'pino';
 import type { CreateAuthenticatorOptions } from '../auth/create-authenticator.js';
 import { loadCapabilityConfig } from '../config/capability.js';
 import type { PlatformConfig } from '../config/platform.js';
-import { createHttpServer } from '../http/server.js';
+import { createHttpServer, RequestTracker } from '../http/server.js';
 import type { HttpServer } from '../http/types.js';
 import {
   ApplicationLifecycle,
@@ -15,7 +15,7 @@ import {
 import { createLogger } from '../logging/logger.js';
 import { createStdioMcpServer } from '../mcp/stdio.js';
 import { buildOpenApiDocument } from '../openapi/document.js';
-import { loggingTelemetrySink, noopTelemetrySink } from '../telemetry/sink.js';
+import { noopTelemetrySink } from '../telemetry/sink.js';
 import type { CapabilityTelemetryEstimator, TelemetrySink } from '../telemetry/types.js';
 import { createToolRegistry, type ToolRegistry } from '../tools/registry.js';
 import { ToolInvoker } from './invoker.js';
@@ -57,6 +57,11 @@ export interface CreateApplicationOptions<TConfig extends PlatformConfig> {
   readonly authenticatorOptions?: CreateAuthenticatorOptions;
   /** Readiness cache window; zero disables caching. */
   readonly readinessCacheMs?: number;
+  /**
+   * Overrides `http.shutdownGraceMs` as the budget for waiting on in-flight invocations. Primarily
+   * for tests that do not want to wait ten seconds for a deliberately stuck handler.
+   */
+  readonly drainTimeoutMs?: number;
 }
 
 export const createAgentToolApplication = async <
@@ -79,7 +84,10 @@ export const createAgentToolApplication = async <
 
   const logger = options.logger ?? createLogger(config);
   const lifecycle = new ApplicationLifecycle();
-  const telemetry = options.telemetry ?? loggingTelemetrySink(logger);
+  // Opt-in by default. A capability that wants invocation telemetry in its logs passes
+  // `loggingTelemetrySink(logger)` explicitly, rather than every deployment paying for a log line
+  // per call because the platform decided for it.
+  const telemetry = options.telemetry ?? noopTelemetrySink;
 
   const capabilityContext: CapabilityContext<TConfig> = { config, logger, lifecycle, telemetry };
   const services = await capability.createServices(capabilityContext);
@@ -121,6 +129,8 @@ export const createAgentToolApplication = async <
     ...(options.readinessCacheMs === undefined ? {} : { cacheMs: options.readinessCacheMs }),
   });
 
+  const requestTracker = new RequestTracker();
+
   const http = createHttpServer<TConfig, TServices>({
     config,
     logger,
@@ -135,7 +145,57 @@ export const createAgentToolApplication = async <
     protectedRoutes: capability.protectedRoutes,
     publicRoutes: capability.publicRoutes,
     authenticatorOptions: options.authenticatorOptions,
+    requestTracker,
   });
+
+  const drainTimeoutMs = options.drainTimeoutMs ?? config.http.shutdownGraceMs;
+  let shutdownOnce: Promise<void> | undefined;
+
+  /**
+   * Ordered teardown:
+   *
+   *  1. begin draining, which stops admitting new work and aborts the application signal, so every
+   *     in-flight invocation observes cancellation immediately;
+   *  2. wait, within the configured grace period, for in-flight tool invocations *and* in-flight
+   *     HTTP requests to unwind. Both are needed: capability extension routes never run through
+   *     the invoker, and tool calls over stdio MCP never run through HTTP;
+   *  3. only then run the capability `stop` hook, so no handler — tool or route — is torn out from
+   *     under a call still using the domain resources it is about to destroy;
+   *  4. close the listener last.
+   *
+   * Step 3 is the whole point. Running `stop()` first is what produces use-after-teardown failures
+   * during shutdown.
+   */
+  const runShutdown = async (): Promise<void> => {
+    lifecycle.beginDraining();
+    readinessAggregator.invalidate();
+
+    const deadline = Date.now() + drainTimeoutMs;
+    const invocations = await invoker.waitForDrain(drainTimeoutMs);
+    if (!invocations.drained) {
+      logger.warn(
+        { event: 'shutdown.drain.timeout', activeInvocations: invoker.activeCount, drainTimeoutMs },
+        'in-flight invocations did not finish within the shutdown grace period',
+      );
+    }
+
+    // Whatever remains of the same budget, so a capability route that never returns cannot hold
+    // the process open either.
+    const requests = await requestTracker.waitForDrain(Math.max(0, deadline - Date.now()));
+    if (!requests.drained) {
+      logger.warn(
+        { event: 'shutdown.requests.timeout', activeRequests: requestTracker.activeCount },
+        'in-flight HTTP requests did not finish within the shutdown grace period',
+      );
+    }
+
+    try {
+      await capability.lifecycle?.stop?.(runtimeContext);
+    } finally {
+      await http.close();
+      lifecycle.markStopped();
+    }
+  };
 
   return {
     config,
@@ -165,14 +225,10 @@ export const createAgentToolApplication = async <
       lifecycle.markReady();
     },
     async shutdown(): Promise<void> {
-      lifecycle.beginDraining();
-      readinessAggregator.invalidate();
-      try {
-        await capability.lifecycle?.stop?.(runtimeContext);
-      } finally {
-        await http.close();
-        lifecycle.markStopped();
-      }
+      // Memoised so concurrent callers, a repeated call, and a signal racing an explicit shutdown
+      // all await one teardown rather than closing the listener or stopping the capability twice.
+      shutdownOnce ??= runShutdown();
+      await shutdownOnce;
     },
   };
 };
@@ -205,17 +261,31 @@ export const startAgentToolApplication = async <
   if (options.handleSignals !== false) {
     const stop = (signal: NodeJS.Signals): void => {
       application.logger.info({ event: 'shutdown.signal', signal }, 'shutting down');
-      const graceMs = application.config.http.shutdownGraceMs;
-      const timer = setTimeout(() => process.exit(1), Math.max(1, graceMs));
+      // A hard backstop in case teardown itself hangs. `shutdown()` already bounds its own wait for
+      // in-flight work, so reaching this timer means something below that is stuck; the extra
+      // second keeps the two budgets from racing each other to the millisecond.
+      const graceMs = Math.max(1, application.config.http.shutdownGraceMs) + 1000;
+      const timer = setTimeout(() => {
+        application.logger.error(
+          { event: 'shutdown.timeout', graceMs },
+          'shutdown did not complete within the grace period; exiting non-zero',
+        );
+        process.exit(1);
+      }, graceMs);
       timer.unref?.();
+
       void application
         .shutdown()
-        .catch((error: unknown) =>
-          application.logger.error({ err: error, event: 'shutdown.failed' }, 'shutdown failed'),
-        )
-        .finally(() => {
+        .then(() => {
           clearTimeout(timer);
           process.exit(0);
+        })
+        .catch((error: unknown) => {
+          // A failed shutdown must not look like a clean one: an orchestrator restarting the
+          // replica needs to know teardown did not complete.
+          application.logger.error({ err: error, event: 'shutdown.failed' }, 'shutdown failed');
+          clearTimeout(timer);
+          process.exit(1);
         });
     };
     process.once('SIGINT', () => stop('SIGINT'));

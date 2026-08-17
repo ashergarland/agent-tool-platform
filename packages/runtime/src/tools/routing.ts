@@ -32,9 +32,21 @@ export const defaultAnnotations = (definition: {
 const bullets = (heading: string, entries: readonly string[]): readonly string[] =>
   entries.length === 0 ? [] : [heading, ...entries.map((entry) => `- ${entry}`)];
 
+/**
+ * The generic state disclosure.
+ *
+ * This deliberately states only what the platform actually knows: whether the tool changes state.
+ * It used to instruct every write tool to "preview first", which was a promise the platform cannot
+ * keep — a preview only exists when a tool's own input schema offers one. Telling an agent to
+ * preview a tool that has no `dryRun` produces a failed call and teaches it to distrust the
+ * guidance.
+ *
+ * A tool that *is* gated says so in its own `description` and in capability-supplied routing
+ * content, where the claim is true by construction.
+ */
 const stateLine = (routing: ToolRouting): string =>
   routing.changesState
-    ? 'State: CHANGES state. Preview first, obtain explicit user approval, execute, then verify.'
+    ? 'State: CHANGES state. Confirm the caller intends this change before invoking, and verify the result afterwards.'
     : 'State: read-only. Safe to call while investigating.';
 
 /** Renders the agent-facing description from the declared description plus structured routing. */

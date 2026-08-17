@@ -77,33 +77,94 @@ export const defaultRetryableForErrorCode = (code: ErrorCode): boolean => retrya
 
 export const maximumMessageLength = 300;
 export const maximumDetailEntries = 24;
+/** Maximum nesting depth retained in caller-visible details. */
+export const maximumDetailDepth = 4;
 const maximumDetailStringLength = 300;
+/** Total nodes retained across the whole detail structure, regardless of shape. */
+const maximumDetailNodes = 200;
 
 /** Bounds a caller-visible message so no transport emits unbounded text. */
 export const boundedMessage = (message: string): string =>
   message.length <= maximumMessageLength ? message : `${message.slice(0, maximumMessageLength)}...`;
 
-const boundedDetailValue = (value: unknown): unknown =>
-  typeof value === 'string' && value.length > maximumDetailStringLength
+const boundedString = (value: string): string =>
+  value.length > maximumDetailStringLength
     ? `${value.slice(0, maximumDetailStringLength)}...`
     : value;
 
 /**
- * Bounds both the breadth and the width of caller-visible details. Details are structured hints,
- * not a place to smuggle an unbounded payload back to a caller.
+ * Recursively bounds caller-visible details.
+ *
+ * Details are structured hints, not a place to smuggle an unbounded payload back to a caller.
+ * Bounding only the top level was not enough: a single deeply nested or wide value could still
+ * produce an arbitrarily large HTTP or MCP error body. Four independent ceilings apply — entries
+ * per collection, string length, nesting depth, and a total node budget across the whole
+ * structure — so no shape can defeat all of them at once.
+ *
+ * Cycles are replaced with a marker rather than followed, so a self-referential value can neither
+ * hang serialization nor expand without limit.
+ *
+ * Small structured details survive untouched, which is the point: an `issues` array or a
+ * `{ limit, maxBytes }` hint is exactly what a caller needs to act on.
  */
-const boundedDetails = (details: unknown): unknown => {
-  if (details === undefined || details === null) return undefined;
-  if (Array.isArray(details)) return details.slice(0, maximumDetailEntries).map(boundedDetailValue);
-  if (typeof details === 'object') {
-    return Object.fromEntries(
-      Object.entries(details as Record<string, unknown>)
-        .slice(0, maximumDetailEntries)
-        .map(([key, value]) => [key, boundedDetailValue(value)]),
-    );
+const boundValue = (
+  value: unknown,
+  depth: number,
+  seen: Set<object>,
+  budget: { remaining: number },
+): unknown => {
+  if (budget.remaining <= 0) return '[truncated]';
+  budget.remaining -= 1;
+
+  if (typeof value === 'string') return boundedString(value);
+  if (value === null || typeof value !== 'object') {
+    // Functions and symbols do not survive JSON serialization; naming the type is more useful to
+    // a caller than a silently missing key.
+    if (typeof value === 'function' || typeof value === 'symbol') return `[${typeof value}]`;
+    if (typeof value === 'bigint') return value.toString();
+    return value;
   }
-  return boundedDetailValue(details);
+
+  if (seen.has(value)) return '[circular]';
+  if (depth >= maximumDetailDepth) return Array.isArray(value) ? '[array]' : '[object]';
+
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const kept = value
+        .slice(0, maximumDetailEntries)
+        .map((entry) => boundValue(entry, depth + 1, seen, budget));
+      return value.length > maximumDetailEntries ? [...kept, '[truncated]'] : kept;
+    }
+    // Dates and similar wrappers serialize usefully on their own; enumerating them would produce
+    // an empty object rather than the value a caller expects. An invalid Date is excluded because
+    // `toISOString` throws on one.
+    if (value instanceof Date) {
+      return Number.isFinite(value.getTime()) ? value.toISOString() : '[invalid date]';
+    }
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .slice(0, maximumDetailEntries)
+        .map(([key, entry]) => [boundedString(key), boundValue(entry, depth + 1, seen, budget)]),
+    );
+  } catch {
+    // Enumeration is not inert: a throwing getter or a hostile Proxy trap runs arbitrary code
+    // here. This function exists to make a careless or hostile detail value safe, so a value that
+    // fights back degrades to a marker rather than escaping. Letting it throw would be worse than
+    // useless: `boundedDetails` runs inside the AppError constructor, so the throw would replace a
+    // precise 4xx with an opaque 500.
+    return '[unserializable]';
+  } finally {
+    // Removed on the way out so a value repeated across sibling branches is not misreported as a
+    // cycle; only a genuine ancestor reference is.
+    seen.delete(value);
+  }
 };
+
+const boundedDetails = (details: unknown): unknown =>
+  details === undefined || details === null
+    ? undefined
+    : boundValue(details, 0, new Set<object>(), { remaining: maximumDetailNodes });
 
 export interface ErrorPayload {
   readonly code: ErrorCode;

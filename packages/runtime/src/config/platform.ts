@@ -51,16 +51,27 @@ export const positiveInteger = (fallback: number): z.ZodDefault<z.ZodCoercedNumb
 /**
  * `trustProxy` mirrors Fastify's own option: a boolean, a hop count, or a CSV of trusted
  * addresses/CIDRs. Parsing it here keeps the HTTP layer free of environment concerns.
+ *
+ * A bare number is always a hop count, including `1`. That matters more than it looks: a proxy
+ * appends to `X-Forwarded-For` rather than replacing it, so a caller can send its own header and
+ * have the real address appended after it. `true` trusts the whole chain and therefore lets that
+ * caller name any address it likes — which, for the address-keyed pre-auth budget, means choosing
+ * its own rate-limit bucket. A hop count takes the entry the trusted proxy actually added.
+ *
+ * `0` is treated as "trust nothing", which is what a zero-hop count means anyway.
  */
 const trustProxySchema = z
   .string()
   .default('false')
   .transform((value): boolean | number | string[] => {
     const normalized = value.trim().toLowerCase();
-    if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
-    if (['false', '0', 'no', 'off'].includes(normalized)) return false;
-    const hops = Number.parseInt(normalized, 10);
-    if (String(hops) === normalized && hops >= 0) return hops;
+    // Numbers are checked before the boolean words so `1` is one hop, never `true`.
+    if (/^\d+$/u.test(normalized)) {
+      const hops = Number.parseInt(normalized, 10);
+      return hops === 0 ? false : hops;
+    }
+    if (['true', 'yes', 'on'].includes(normalized)) return true;
+    if (['false', 'no', 'off'].includes(normalized)) return false;
     return value
       .split(',')
       .map((entry) => entry.trim())

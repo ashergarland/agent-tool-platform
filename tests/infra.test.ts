@@ -124,6 +124,21 @@ describe('shared infrastructure', () => {
     expect(containerApp).toContain('minReplicas');
   });
 
+  it('configures a bounded trusted-hop policy rather than trusting the whole proxy chain', async () => {
+    const containerApp = await readFile(join(infraRoot, 'modules/container-app.bicep'), 'utf8');
+
+    // Container Apps ingress appends to X-Forwarded-For, so trusting the whole chain would let a
+    // caller prepend an address and pick its own pre-auth abuse bucket.
+    expect(containerApp).not.toMatch(/name:\s*'TRUST_PROXY'\s*\n\s*value:\s*'true'/u);
+    expect(containerApp).toMatch(
+      /name:\s*'TRUST_PROXY'\s*\n\s*value:\s*string\(trustedProxyHops\)/u,
+    );
+
+    // The hop count must default to the single Container Apps ingress hop and stay bounded.
+    expect(containerApp).toMatch(/param\s+trustedProxyHops\s+int\s*=\s*1/u);
+    expect(containerApp).toMatch(/@maxValue\(\d+\)\s*\nparam\s+trustedProxyHops/u);
+  });
+
   it('documents the unresolved distribution decision rather than silently choosing one', async () => {
     const readme = await readFile(join(infraRoot, 'README.md'), 'utf8');
     expect(readme).toMatch(/unresolved/iu);

@@ -68,6 +68,17 @@ export const minimalCapability = defineAgentToolCapability({
         count: services.notes.size,
         maxNotes: config.minimal.maxNotes,
       }));
+
+      // Deliberately slow, so a test can hold a capability route in flight across shutdown and
+      // observe that domain state is not torn down underneath it. Extension routes do not run
+      // through the invoker, so this is the only way to exercise that path.
+      router.get<{ Querystring: { delayMs?: string } }>('/notes/slow-stats', async (request) => {
+        const delayMs = Math.min(5000, Number.parseInt(request.query.delayMs ?? '100', 10) || 0);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        // Read domain state *after* the delay: if the stop hook had run, this would observe a
+        // cleared store.
+        return { count: services.notes.size, servedAfterMs: delayMs };
+      });
     },
   ],
 
@@ -92,5 +103,12 @@ export type { MinimalConfig, MinimalServices };
 export { minimalConfig, minimalEnvSchema } from './config.js';
 export { minimalInstructions } from './instructions.js';
 export { NoteStore } from './services.js';
-export { brokenOutput, listNotes, minimalTools, putNote, waitForCancellation } from './tools.js';
+export {
+  brokenOutput,
+  ignoreCancellation,
+  listNotes,
+  minimalTools,
+  putNote,
+  waitForCancellation,
+} from './tools.js';
 export default minimalCapability;

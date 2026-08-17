@@ -117,6 +117,16 @@ param rateLimitWindowMs int = 60000
 @minValue(0)
 param preAuthRateLimitMax int = 30
 
+@description('''
+Trusted proxy hops in front of the container. Container Apps ingress is one hop, so the default of
+1 makes the runtime take the right-most X-Forwarded-For entry, which is the one ingress added.
+Raise this only to match additional trusted proxies; never trust the whole chain, or a caller can
+choose its own rate-limit bucket by sending the header itself.
+''')
+@minValue(0)
+@maxValue(8)
+param trustedProxyHops int = 1
+
 @description('Key Vault secret URIs mounted as container secrets: [{ name, keyVaultUrl }].')
 param secretRefs array = []
 
@@ -159,8 +169,17 @@ var baseEnv = concat(
     {
       // Container Apps ingress always fronts the app, so X-Forwarded-For is the only way to tell
       // callers apart for the pre-auth abuse budget.
+      //
+      // The value is a bounded hop count, never `true`. Ingress *appends* to X-Forwarded-For
+      // rather than replacing it, so a caller can send its own header and have the real address
+      // appended after it. Trusting the whole chain would let that caller name any address it
+      // likes and choose its own abuse-budget bucket. Trusting exactly one hop takes the
+      // right-most entry — the one ingress itself added — which is the only trustworthy value.
+      //
+      // A deployment behind an additional proxy in front of Container Apps must raise this to
+      // match the real number of trusted hops.
       name: 'TRUST_PROXY'
-      value: 'true'
+      value: string(trustedProxyHops)
     }
     {
       name: 'RATE_LIMIT_MAX'

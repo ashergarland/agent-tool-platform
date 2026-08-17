@@ -161,6 +161,72 @@ describe('rate limiting', () => {
     expect(throttled.headers['retry-after']).toBeTypeOf('string');
   });
 
+  it('does not let a caller-supplied X-Forwarded-For choose its own abuse bucket', async () => {
+    // TRUST_PROXY=1 is what the shared Container App module configures: exactly one trusted hop.
+    const { application } = await fixture({
+      env: { PRE_AUTH_RATE_LIMIT_MAX: '2', RATE_LIMIT_MAX: '1000', TRUST_PROXY: '1' },
+    });
+    expect(application.config.http.trustProxy).toBe(1);
+
+    // Container Apps ingress *appends* the real peer address to whatever the caller sent, so the
+    // header a hostile caller produces looks like "<forged>, <real>". A caller rotating the forged
+    // portion would, if the whole chain were trusted, land in a fresh bucket every request and
+    // never exhaust the abuse budget.
+    const ingressAddress = '198.51.100.7';
+    const attempt = (forged: string) =>
+      application.http.inject({
+        method: 'GET',
+        url: '/tools',
+        headers: {
+          authorization: 'Bearer invalid-credential',
+          'x-forwarded-for': `${forged}, ${ingressAddress}`,
+        },
+      });
+
+    expect((await attempt('10.1.1.1')).statusCode).toBe(401);
+    expect((await attempt('10.2.2.2')).statusCode).toBe(401);
+
+    // A third distinct forged address is still throttled, because all three were charged to the
+    // one hop ingress actually vouched for.
+    const throttled = await attempt('10.3.3.3');
+    expect(throttled.statusCode).toBe(429);
+    expect(throttled.headers['retry-after']).toBeTypeOf('string');
+  });
+
+  it('charges the ingress-provided hop rather than the caller-prepended one', async () => {
+    const { application } = await fixture({
+      env: { PRE_AUTH_RATE_LIMIT_MAX: '1', RATE_LIMIT_MAX: '1000', TRUST_PROXY: '1' },
+    });
+
+    const attempt = (header: string) =>
+      application.http.inject({
+        method: 'GET',
+        url: '/tools',
+        headers: { authorization: 'Bearer invalid-credential', 'x-forwarded-for': header },
+      });
+
+    // Exhaust the budget for the address ingress reports.
+    expect((await attempt('10.0.0.1, 198.51.100.7')).statusCode).toBe(401);
+    expect((await attempt('10.0.0.2, 198.51.100.7')).statusCode).toBe(429);
+
+    // A genuinely different ingress hop is a different bucket, which is what makes the budget
+    // per-caller rather than global.
+    expect((await attempt('10.0.0.3, 203.0.113.4')).statusCode).toBe(401);
+  });
+
+  it('treats TRUST_PROXY=1 as one hop rather than as a boolean', async () => {
+    // '1' reads as truthy in most environment parsing, and trusting the whole chain here would
+    // silently reintroduce the spoofing hole the hop count exists to close.
+    const one = await fixture({ env: { TRUST_PROXY: '1' } });
+    expect(one.application.config.http.trustProxy).toBe(1);
+
+    const zero = await fixture({ env: { TRUST_PROXY: '0' } });
+    expect(zero.application.config.http.trustProxy).toBe(false);
+
+    const all = await fixture({ env: { TRUST_PROXY: 'true' } });
+    expect(all.application.config.http.trustProxy).toBe(true);
+  });
+
   it('does not let anonymous noise consume the principal budget', async () => {
     const { application, apiKey } = await fixture({
       env: { PRE_AUTH_RATE_LIMIT_MAX: '1', RATE_LIMIT_MAX: '5' },

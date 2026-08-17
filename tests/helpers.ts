@@ -18,6 +18,8 @@ export interface FixtureOptions {
   readonly readinessCacheMs?: number;
   /** Share one credential across several applications, as the lifecycle conformance suite needs. */
   readonly apiKey?: string;
+  /** Shortens the in-flight drain budget so a shutdown test does not wait the full grace period. */
+  readonly drainTimeoutMs?: number;
 }
 
 export interface Fixture {
@@ -36,6 +38,7 @@ export const createFixture = async (options: FixtureOptions = {}): Promise<Fixtu
       logger: createSilentLogger(),
       telemetry,
       readinessCacheMs: options.readinessCacheMs ?? 0,
+      ...(options.drainTimeoutMs === undefined ? {} : { drainTimeoutMs: options.drainTimeoutMs }),
       env: {
         NODE_ENV: 'test',
         AUTH_MODE: 'api-key',

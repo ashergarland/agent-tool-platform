@@ -11,6 +11,7 @@ platform has to get right:
 | `list_notes` (read tool)            | Registry validation, routing rendering, read annotations, HTTP and MCP invocation. |
 | `put_note` (write tool)             | Write annotations, `x-openai-isConsequential`, the generic mutation gate.          |
 | `wait_for_cancellation` (read tool) | Cancellation on disconnect, application drain, and request deadlines.              |
+| `ignore_cancellation` (read tool)   | The bounded shutdown drain, against a handler that ignores its signal.             |
 | `broken_output` (read tool)         | Registry output validation, and that the offending value never reaches a caller.   |
 | `NoteStore` service                 | Capability-owned services, generic over the capability type.                       |
 | Readiness contributor               | Readiness aggregation and the 503 path.                                            |

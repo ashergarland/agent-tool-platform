@@ -32,6 +32,12 @@ The properties most worth reporting a break in:
   reachable from any tool.
 - **Readiness disclosure.** `/ready` is public, so its output is bounded and must not carry secrets,
   paths, resource identifiers, or raw provider errors.
+- **Error disclosure bounds.** Caller-visible details are bounded recursively — entries, array
+  lengths, string lengths, nesting depth, and a total node budget — and circular references are
+  replaced rather than followed, so no detail structure can produce an unbounded response body.
+- **Proxy trust.** `TRUST_PROXY` must describe the real topology. Because a proxy appends to
+  `X-Forwarded-For`, trusting the whole chain lets a caller prepend an address and choose its own
+  pre-auth abuse bucket. Deployments set a bounded hop count instead.
 - **Telemetry.** The telemetry contract carries no prompts, source, arguments, results, paths,
   filenames, resource identifiers, or credentials, and measurements are sanitized before reaching a
   sink.
@@ -41,8 +47,9 @@ The properties most worth reporting a break in:
 - **Rate limiting is per replica.** State is in-process, so two replicas each admit the configured
   maximum. It is a fair-use and abuse control, not a distributed quota.
 - **`TRUST_PROXY` must match the deployment.** The pre-auth abuse budget is keyed by client address.
-  Without an accurate proxy configuration every caller behind an ingress shares one bucket, which
-  is a deliberate fail-safe rather than a false per-client budget.
+  The default (`false`) means every caller behind an ingress shares one bucket, which is a
+  deliberate fail-safe rather than a false per-client budget. Set a bounded hop count matching the
+  number of trusted proxies; setting `true` would let a caller choose its own bucket.
 - **`AUTH_MODE=disabled` exists for local and stdio use.** Production configuration refuses it.
 
 ## Automated checks

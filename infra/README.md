@@ -50,6 +50,35 @@ Every module is safe for any account to consume:
 
 `tests/infra.test.ts` enforces all of this, so a regression fails CI rather than review.
 
+## Proxy trust is a bounded hop count, never `true`
+
+`modules/container-app.bicep` sets `TRUST_PROXY` to a **hop count** (`trustedProxyHops`, default
+`1`), not to `true`.
+
+This matters because of how `X-Forwarded-For` actually works. A proxy **appends** to the header
+rather than replacing it, so a caller can send its own `X-Forwarded-For` and Container Apps ingress
+will append the real peer address after it:
+
+```
+X-Forwarded-For: <whatever the caller made up>, <real address ingress observed>
+```
+
+If the runtime trusted the whole chain, it would take the left-most entry — the value the caller
+invented. The pre-auth abuse budget is keyed by address, so a hostile caller could rotate that
+value on every request, land in a fresh bucket each time, and never be throttled. The abuse control
+would be defeated by a header anyone can set.
+
+A hop count of `1` tells the runtime to trust exactly one proxy, so it takes the right-most entry —
+the one ingress itself added, which is the only value in the chain anything actually vouched for.
+
+Raise `trustedProxyHops` only to match additional genuinely trusted proxies in front of Container
+Apps. Never set it to `true`.
+
+`tests/http.test.ts` proves the property directly: three requests carrying three different forged
+`X-Forwarded-For` prefixes but the same appended ingress hop all land in one bucket and the third
+is rejected with `429`. It also asserts that `TRUST_PROXY=1` parses as one hop rather than as a
+boolean, which is the parsing mistake that would silently reintroduce the hole.
+
 ## Validation
 
 CI builds and lints every module and the example composition:

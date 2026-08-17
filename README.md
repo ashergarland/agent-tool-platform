@@ -218,6 +218,11 @@ Annotations default from `kind` (`read` → read-only and idempotent; `write` �
 tool may override any of them. `scope` is optional free text; the platform has no opinion about
 what a scope _is_, which is why nothing Azure-specific survived generalization.
 
+The rendered state line states only what the platform knows: whether the tool changes state. It
+does **not** claim a preview exists, because a preview only exists when a tool's own schema offers
+one. A gated tool declares that in its own description and routing content — see the fixture's
+`put_note`, whose contract genuinely has `dryRun` and `confirm`.
+
 ---
 
 ## Errors
@@ -228,6 +233,10 @@ One bounded, transport-safe model with twelve codes:
 `rate_limited` · `not_ready` · `busy` · `timeout` · `upstream_error` · `internal_error`
 
 - Messages and details are bounded in both breadth and width.
+- Detail bounding is **recursive**: nested entries, array lengths, string lengths, and nesting depth
+  are all capped, with a total node budget across the whole structure, so no shape produces an
+  unbounded HTTP or MCP payload. Circular references become `[circular]` rather than being
+  followed. Small structured details survive untouched.
 - HTTP status and retryability are mapped centrally.
 - `toPayload(requestId)` never carries a stack, a cause, or an absolute path.
 - An unmapped exception becomes a generic `internal_error`; its text is kept server-side as `cause`
@@ -256,28 +265,28 @@ is refused in production.
 Everything below is read by the runtime itself. A capability adds its own variables through its
 schema and never has to redeclare these.
 
-| Variable                                  | Default             | Purpose                                                                   |
-| ----------------------------------------- | ------------------- | ------------------------------------------------------------------------- |
-| `NODE_ENV`                                | `development`       | `development`, `test`, or `production`. Production forbids disabled auth. |
-| `HOST` / `PORT`                           | `0.0.0.0` / `8080`  | Listener address.                                                         |
-| `LOG_LEVEL`                               | `info`              | Pino level.                                                               |
-| `SERVICE_NAME` / `SERVICE_VERSION`        | capability manifest | Overrides the capability's declared identity.                             |
-| `GIT_SHA`                                 | `unknown`           | Reported by `/version`.                                                   |
-| `PUBLIC_BASE_URL`                         | —                   | Advertised as the OpenAPI server URL.                                     |
-| `BODY_LIMIT_BYTES`                        | `1000000`           | Maximum request body.                                                     |
-| `TRUST_PROXY`                             | `false`             | Boolean, hop count, or CSV of trusted addresses.                          |
-| `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `120` / `60000`     | Per-principal fair-use budget. `0` disables.                              |
-| `PRE_AUTH_RATE_LIMIT_MAX`                 | `30`                | Pre-auth abuse budget, keyed by address.                                  |
-| `REQUEST_TIMEOUT_MS`                      | `0`                 | Per-request deadline. `0` disables.                                       |
-| `SHUTDOWN_GRACE_MS`                       | `10000`             | Grace period before a signal-driven shutdown gives up.                    |
-| `AUTH_MODE`                               | `api-key`           | `api-key`, `entra-jwt`, or `disabled`.                                    |
-| `API_KEYS`                                | —                   | CSV. Each key must be a high-entropy random token.                        |
-| `ENTRA_TENANT_ID` / `ENTRA_AUDIENCE`      | —                   | Required for `entra-jwt`.                                                 |
-| `ENTRA_ALLOWED_APP_IDS`                   | —                   | Optional CSV allow-list of calling applications.                          |
-| `ENTRA_CLOCK_TOLERANCE_SECONDS`           | `60`                | Skew tolerance for token validation.                                      |
-| `ENTRA_JWKS_URI`                          | tenant discovery    | Override for the key set endpoint.                                        |
-| `MUTATIONS_ENABLED`                       | `false`             | Whether state-changing tools may execute at all.                          |
-| `MUTATION_CONFIRMATION_REQUIRED`          | `true`              | Whether execution requires explicit confirmation.                         |
+| Variable                                  | Default             | Purpose                                                                                                  |
+| ----------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                | `development`       | `development`, `test`, or `production`. Production forbids disabled auth.                                |
+| `HOST` / `PORT`                           | `0.0.0.0` / `8080`  | Listener address.                                                                                        |
+| `LOG_LEVEL`                               | `info`              | Pino level.                                                                                              |
+| `SERVICE_NAME` / `SERVICE_VERSION`        | capability manifest | Overrides the capability's declared identity.                                                            |
+| `GIT_SHA`                                 | `unknown`           | Reported by `/version`.                                                                                  |
+| `PUBLIC_BASE_URL`                         | —                   | Advertised as the OpenAPI server URL.                                                                    |
+| `BODY_LIMIT_BYTES`                        | `1000000`           | Maximum request body.                                                                                    |
+| `TRUST_PROXY`                             | `false`             | Boolean, **hop count**, or CSV of trusted addresses. A bare number is always a hop count, including `1`. |
+| `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `120` / `60000`     | Per-principal fair-use budget. `0` disables.                                                             |
+| `PRE_AUTH_RATE_LIMIT_MAX`                 | `30`                | Pre-auth abuse budget, keyed by address.                                                                 |
+| `REQUEST_TIMEOUT_MS`                      | `0`                 | Per-request deadline. `0` disables.                                                                      |
+| `SHUTDOWN_GRACE_MS`                       | `10000`             | Grace period before a signal-driven shutdown gives up.                                                   |
+| `AUTH_MODE`                               | `api-key`           | `api-key`, `entra-jwt`, or `disabled`.                                                                   |
+| `API_KEYS`                                | —                   | CSV. Each key must be a high-entropy random token.                                                       |
+| `ENTRA_TENANT_ID` / `ENTRA_AUDIENCE`      | —                   | Required for `entra-jwt`.                                                                                |
+| `ENTRA_ALLOWED_APP_IDS`                   | —                   | Optional CSV allow-list of calling applications.                                                         |
+| `ENTRA_CLOCK_TOLERANCE_SECONDS`           | `60`                | Skew tolerance for token validation.                                                                     |
+| `ENTRA_JWKS_URI`                          | tenant discovery    | Override for the key set endpoint.                                                                       |
+| `MUTATIONS_ENABLED`                       | `false`             | Whether state-changing tools may execute at all.                                                         |
+| `MUTATION_CONFIRMATION_REQUIRED`          | `true`              | Whether execution requires explicit confirmation.                                                        |
 
 ---
 
@@ -318,6 +327,11 @@ apart is what stops one unauthenticated caller from consuming another principal'
 
 Rate-limit state is **in-process** for v0. Two replicas each admit the configured maximum; this is
 a fair-use and abuse control, not a distributed quota.
+
+Because the abuse budget is keyed by address, `TRUST_PROXY` must describe the real topology. A
+proxy _appends_ to `X-Forwarded-For`, so trusting the whole chain (`true`) lets a caller prepend an
+address of its choosing and pick its own bucket. Set a bounded hop count instead — the shared
+Container App module uses `1`, matching the single Container Apps ingress hop.
 
 ### Protected extension routes
 
@@ -377,6 +391,27 @@ contributor that throws collapses into an opaque failure, because `/ready` is pu
 Cancellation composes application shutdown, HTTP disconnect, and any configured request deadline
 into a single signal. `ToolInvocationContext.signal` is never optional.
 
+### Shutdown ordering
+
+`shutdown()` is memoised, so concurrent and repeated calls run teardown exactly once. It proceeds
+in a deliberate order:
+
+1. **Begin draining.** New invocations are refused with `not_ready`, and the application signal
+   aborts so every in-flight call observes cancellation immediately.
+2. **Wait for in-flight work**, bounded by `SHUTDOWN_GRACE_MS`. The runtime tracks admitted
+   invocations, so this waits for actual work rather than for a fixed delay. A handler that ignores
+   its cancellation signal cannot hold the process open: the wait times out, logs a warning naming
+   the number of stuck invocations, and proceeds.
+3. **Run the capability `stop` hook.** Only now, so a handler is never torn out from under a call
+   still using the domain resources it is about to destroy.
+4. **Close the listener.**
+
+Step 3 is the point of the ordering. Running `stop()` first is what produces confusing
+use-after-teardown failures during shutdown.
+
+When `startAgentToolApplication` installs signal handlers, a clean shutdown exits `0` and a failed
+or timed-out shutdown exits non-zero, so an orchestrator can tell the difference.
+
 ---
 
 ## Safety primitives
@@ -411,6 +446,18 @@ capability.
 
 Intentionally minimal. There is a contract and a no-op default sink, and nothing else: no
 Application Insights wiring, no Log Analytics, no workbook, no rollup, no dashboards.
+
+**Telemetry is opt-in.** `createAgentToolApplication` defaults to `noopTelemetrySink`, so a
+deployment that has not chosen a sink pays nothing per invocation. To emit invocation telemetry as
+structured logs, pass the sink explicitly:
+
+```ts
+import { createAgentToolApplication, loggingTelemetrySink } from '@agent-tool-platform/runtime';
+
+const application = await createAgentToolApplication(capability, {
+  telemetry: loggingTelemetrySink(logger),
+});
+```
 
 The runtime records, without any capability cooperation: capability, capability version, tool,
 transport, outcome, error code, and duration. A capability may add an `InvocationMeasurement`

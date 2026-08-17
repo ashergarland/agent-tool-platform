@@ -1,14 +1,23 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { Writable } from 'node:stream';
 import {
   RecordingTelemetrySink,
   approximateTokens,
   compositeTelemetrySink,
+  createAgentToolApplication,
+  createLogger,
   createSilentLogger,
   estimateSafely,
   jsonByteLength,
+  loggingTelemetrySink,
   noopTelemetrySink,
   sanitizeMeasurement,
 } from '@agent-tool-platform/runtime';
+import { createTestPlatformConfig, generateTestApiKey } from '@agent-tool-platform/testkit';
+import minimalCapability, {
+  type MinimalConfig,
+  type MinimalServices,
+} from '@agent-tool-platform/example-minimal-capability';
 import { bearer, createStartedFixture, type Fixture } from './helpers.js';
 
 let fixtures: Fixture[] = [];
@@ -110,6 +119,71 @@ describe('telemetry primitives', () => {
 });
 
 describe('runtime telemetry integration', () => {
+  it('defaults to the no-op sink so telemetry is opt-in', async () => {
+    // No `telemetry` option: the application must not start emitting a log line per invocation
+    // just because nobody chose a sink.
+    const apiKey = generateTestApiKey();
+    const application = await createAgentToolApplication<MinimalServices, MinimalConfig>(
+      minimalCapability,
+      {
+        logger: createSilentLogger(),
+        readinessCacheMs: 0,
+        env: { NODE_ENV: 'test', AUTH_MODE: 'api-key', API_KEYS: apiKey },
+      },
+    );
+    await application.start();
+    try {
+      expect(application.telemetry).toBe(noopTelemetrySink);
+
+      const response = await application.http.inject({
+        method: 'POST',
+        url: '/tools/list_notes',
+        headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+        payload: {},
+      });
+      expect(response.statusCode).toBe(200);
+    } finally {
+      await application.shutdown();
+    }
+  });
+
+  it('accepts the logging sink as an explicit opt-in', async () => {
+    const lines: string[] = [];
+    const destination = new Writable({
+      write(chunk, _encoding, callback) {
+        lines.push(String(chunk));
+        callback();
+      },
+    });
+    const apiKey = generateTestApiKey();
+    const config = createTestPlatformConfig({ env: { API_KEYS: apiKey } });
+    const logger = createLogger(config, { destination });
+
+    const application = await createAgentToolApplication<MinimalServices, MinimalConfig>(
+      minimalCapability,
+      {
+        logger: createSilentLogger(),
+        telemetry: loggingTelemetrySink(logger),
+        readinessCacheMs: 0,
+        env: { NODE_ENV: 'test', AUTH_MODE: 'api-key', API_KEYS: apiKey },
+      },
+    );
+    await application.start();
+    try {
+      await application.http.inject({
+        method: 'POST',
+        url: '/tools/list_notes',
+        headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+        payload: {},
+      });
+      const emitted = lines.join('\n');
+      expect(emitted).toContain('tool.invocation');
+      expect(emitted).toContain('list_notes');
+    } finally {
+      await application.shutdown();
+    }
+  });
+
   it('records baseline invocation metadata the capability never supplies', async () => {
     const { application, apiKey } = await fixture();
     await application.http.inject({

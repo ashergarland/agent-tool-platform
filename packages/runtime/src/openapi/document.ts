@@ -110,11 +110,13 @@ const errorResponses: JsonObject = {
 /**
  * ChatGPT Actions rejects operation descriptions longer than 300 characters, so the operation
  * carries the summary and the full rendered routing guidance stays available from `/tools` and MCP.
+ *
+ * As with the rendered routing state line, this states only that the tool changes state. Whether a
+ * preview or a confirmation exists is the tool's own contract, declared in its schema and its
+ * description, not something the platform can assert on every write tool's behalf.
  */
 const operationDescription = (tool: RegisteredTool<unknown>): string =>
-  tool.kind === 'write'
-    ? `${tool.summary} This changes state and is gated behind preview and explicit confirmation.`
-    : tool.summary;
+  tool.kind === 'write' ? `${tool.summary} This changes state.` : tool.summary;
 
 const toolPath = (tool: RegisteredTool<unknown>): JsonObject => ({
   post: {

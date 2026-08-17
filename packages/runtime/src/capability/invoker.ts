@@ -40,7 +40,48 @@ export interface InvokeToolOptions {
 }
 
 export class ToolInvoker<TServices> {
+  private active = 0;
+  private drained: (() => void)[] = [];
+
   public constructor(private readonly deps: ToolInvokerDeps<TServices>) {}
+
+  /** Number of invocations that have been admitted and have not yet settled. */
+  public get activeCount(): number {
+    return this.active;
+  }
+
+  /**
+   * Resolves once every admitted invocation has settled, or once `timeoutMs` elapses.
+   *
+   * Resolving on timeout rather than rejecting is deliberate: shutdown must make progress even if
+   * a capability handler ignores its cancellation signal. The caller learns what happened from the
+   * returned flag and can log it, but a stuck handler cannot wedge the process open forever.
+   */
+  public async waitForDrain(timeoutMs: number): Promise<{ readonly drained: boolean }> {
+    if (this.active === 0) return { drained: true };
+    if (timeoutMs <= 0) return { drained: false };
+
+    return new Promise<{ readonly drained: boolean }>((resolve) => {
+      let settled = false;
+      const finish = (drained: boolean): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ drained });
+      };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      timer.unref?.();
+      this.drained.push(() => finish(true));
+    });
+  }
+
+  private releaseOne(): void {
+    this.active = Math.max(0, this.active - 1);
+    if (this.active > 0) return;
+    const waiters = this.drained;
+    this.drained = [];
+    for (const notify of waiters) notify();
+  }
 
   public async invoke(options: InvokeToolOptions): Promise<unknown> {
     // Resolving the tool first means an unknown name is a 404 rather than a 503 while draining.
@@ -57,6 +98,8 @@ export class ToolInvoker<TServices> {
     // Three independent reasons to stop, one signal handed to the capability.
     const deadline = new Deadline(timeoutMs, this.deps.lifecycle.signal, options.signal);
     const startedAt = Date.now();
+    // Counted only after admission, so a rejected call never holds shutdown open.
+    this.active += 1;
 
     try {
       const output = await tool.invoke(options.input, this.deps.services, {
@@ -80,6 +123,7 @@ export class ToolInvoker<TServices> {
       throw appError;
     } finally {
       deadline.dispose();
+      this.releaseOne();
     }
   }
 

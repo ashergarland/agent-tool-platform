@@ -50,6 +50,8 @@ export interface HttpServerDeps<TConfig extends PlatformConfig, TServices> {
   readonly publicRoutes?: readonly PublicRouteRegistrar<TConfig, TServices>[] | undefined;
   readonly authenticator?: Authenticator | undefined;
   readonly authenticatorOptions?: CreateAuthenticatorOptions | undefined;
+  /** Receives in-flight request counts so shutdown can drain capability routes too. */
+  readonly requestTracker?: RequestTracker | undefined;
 }
 
 /** Aborts in-flight work when the client disconnects before the response is sent. */
@@ -60,6 +62,56 @@ const requestSignal = (reply: FastifyReply): AbortSignal => {
   });
   return controller.signal;
 };
+
+/**
+ * Counts in-flight HTTP requests so shutdown can wait for them.
+ *
+ * `http.close()` is not sufficient on its own: it does not track injected requests, and a hijacked
+ * reply (which is how the Streamable HTTP MCP endpoint works) bypasses Fastify's normal response
+ * lifecycle. Counting explicitly covers capability extension routes, which never run through the
+ * `ToolInvoker` and would otherwise have their domain resources torn down mid-request.
+ */
+export class RequestTracker {
+  private active = 0;
+  private waiters: (() => void)[] = [];
+
+  public get activeCount(): number {
+    return this.active;
+  }
+
+  public enter(): () => void {
+    this.active += 1;
+    let released = false;
+    // One-shot: `onResponse` and the raw `close` event can both fire for the same request.
+    return (): void => {
+      if (released) return;
+      released = true;
+      this.active = Math.max(0, this.active - 1);
+      if (this.active > 0) return;
+      const waiters = this.waiters;
+      this.waiters = [];
+      for (const notify of waiters) notify();
+    };
+  }
+
+  /** Resolves when every in-flight request has settled, or when the budget elapses. */
+  public async waitForDrain(timeoutMs: number): Promise<{ readonly drained: boolean }> {
+    if (this.active === 0) return { drained: true };
+    if (timeoutMs <= 0) return { drained: false };
+    return new Promise<{ readonly drained: boolean }>((resolve) => {
+      let settled = false;
+      const finish = (drained: boolean): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ drained });
+      };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      timer.unref?.();
+      this.waiters.push(() => finish(true));
+    });
+  }
+}
 
 export const createHttpServer = <TConfig extends PlatformConfig, TServices>(
   deps: HttpServerDeps<TConfig, TServices>,
@@ -107,6 +159,23 @@ export const createHttpServer = <TConfig extends PlatformConfig, TServices>(
     void reply.header('cache-control', 'no-store');
     done(null, payload);
   });
+
+  const tracker = deps.requestTracker;
+  if (tracker) {
+    // Registered before authentication so a request is counted for its whole life, including the
+    // rejection path. Released on whichever of the two lifecycle signals fires first, because a
+    // hijacked reply never reaches `onResponse`.
+    app.addHook('onRequest', (request, reply, done) => {
+      const release = tracker.enter();
+      reply.raw.on('close', release);
+      (request as FastifyRequest & { releaseTracked?: () => void }).releaseTracked = release;
+      done();
+    });
+    app.addHook('onResponse', (request, _reply, done) => {
+      (request as FastifyRequest & { releaseTracked?: () => void }).releaseTracked?.();
+      done();
+    });
+  }
 
   registerErrorHandler(app, config);
 
