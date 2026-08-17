@@ -6,8 +6,8 @@
     "declarationMap": false,
     "types": ["node", "vitest/globals"],
     "paths": {
-      "@agent-tool-platform/runtime": ["../runtime/src/index.ts"],
-      "@agent-tool-platform/runtime/*": ["../runtime/src/*"]
+      "@agent-tool-platform/runtime": ["../../packages/runtime/src/index.ts"],
+      "@agent-tool-platform/runtime/*": ["../../packages/runtime/src/*"]
     }
   }
 }
