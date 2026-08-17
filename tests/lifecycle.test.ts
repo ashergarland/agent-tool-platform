@@ -1,11 +1,18 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import {
   ApplicationLifecycle,
   ReadinessAggregator,
+  createAgentToolApplication,
+  createSilentLogger,
+  defineAgentToolCapability,
+  defineTool,
   readinessDegraded,
   readinessNotReady,
   readinessReady,
+  type AnyToolDefinition,
 } from '@agent-tool-platform/runtime';
+import { generateTestApiKey } from '@agent-tool-platform/testkit';
 import { bearer, createFixture, createStartedFixture, type Fixture } from './helpers.js';
 
 let fixtures: Fixture[] = [];
@@ -369,6 +376,76 @@ describe('application lifecycle integration', () => {
     await shutdown;
   });
 
+  it('refuses a NEW capability extension route once draining has begun', async () => {
+    const { application, apiKey } = track(await createStartedFixture({ drainTimeoutMs: 1000 }));
+    const probe = application.services.routeProbe;
+
+    // Hold shutdown inside its drain window so the listener is still open when the second request
+    // arrives. Without this the teardown finishes first and the probe would be hitting a closed
+    // socket rather than the admission guard.
+    const inFlight = application.http.inject({
+      method: 'GET',
+      url: '/notes/slow-stats?delayMs=400',
+      headers: bearer(apiKey),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(probe.startCount).toBe(1);
+
+    const shutdown = application.shutdown();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(application.lifecycle.accepting).toBe(false);
+
+    // The race this closes: the tracker only protects requests already in flight, so without an
+    // admission guard this request would begin against services that are about to be destroyed.
+    const rejected = await application.http.inject({
+      method: 'GET',
+      url: '/notes/stats',
+      headers: bearer(apiKey),
+    });
+    expect(rejected.statusCode).toBe(503);
+    expect(rejected.json()).toMatchObject({ error: { code: 'not_ready', retryable: true } });
+
+    // The decisive assertion: the capability handler never ran. A 503 produced *after* the handler
+    // began would still satisfy the status check above but would not close the race.
+    expect(probe.startCount).toBe(1);
+
+    const original = await inFlight;
+    await shutdown;
+
+    // The request that was already in flight still completed against live domain state.
+    expect(original.statusCode).toBe(200);
+    expect(application.lifecycle.state).toBe('stopped');
+    expect(application.services.notes.isStopped).toBe(true);
+  });
+
+  it('keeps operational endpoints available while draining', async () => {
+    const { application, apiKey } = track(await createStartedFixture({ drainTimeoutMs: 1000 }));
+
+    const inFlight = application.http.inject({
+      method: 'GET',
+      url: '/notes/slow-stats?delayMs=400',
+      headers: bearer(apiKey),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const shutdown = application.shutdown();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // Operators and orchestrators still need to observe a draining replica, so the guard must not
+    // be applied to the core endpoints.
+    for (const path of ['/health', '/version', '/openapi.json']) {
+      const response = await application.http.inject({ method: 'GET', url: path });
+      expect(response.statusCode, path).toBe(200);
+    }
+
+    // `/ready` stays reachable and keeps reporting not-ready while draining.
+    const ready = await application.http.inject({ method: 'GET', url: '/ready' });
+    expect(ready.statusCode).toBe(503);
+    expect(ready.json()).toMatchObject({ ready: false, checks: [{ detail: 'draining' }] });
+
+    await inFlight;
+    await shutdown;
+  });
+
   it('applies a configured request deadline to the invocation signal', async () => {
     const { application, apiKey } = track(
       await createStartedFixture({ env: { REQUEST_TIMEOUT_MS: '60' } }),
@@ -381,5 +458,108 @@ describe('application lifecycle integration', () => {
     });
     expect(response.statusCode).toBe(504);
     expect(response.json()).toMatchObject({ error: { code: 'timeout', retryable: true } });
+  });
+});
+
+describe('public capability extension routes during drain', () => {
+  /**
+   * The minimal fixture deliberately has no public routes — the platform's position is that
+   * exposing something unauthenticated should be a rare, explicit act, so the fixture should not
+   * normalise it. This suite therefore defines its own tiny capability rather than growing one
+   * onto the shared fixture.
+   */
+  interface ProbeServices {
+    readonly probe: { starts: number; stopped: boolean };
+  }
+
+  const noopTool = defineTool({
+    name: 'noop',
+    title: 'No-op',
+    summary: 'Return a constant.',
+    description: 'Return a constant so the registry is non-empty and readiness passes.',
+    kind: 'read',
+    routing: {
+      useWhen: ['a capability needs at least one registered tool'],
+      doNotUseWhen: ['you want anything to happen'],
+      changesState: false,
+    },
+    inputSchema: z.object({}),
+    outputSchema: z.object({ ok: z.boolean() }),
+    handler() {
+      return Promise.resolve({ ok: true });
+    },
+  }) as AnyToolDefinition<ProbeServices>;
+
+  const publicRouteCapability = defineAgentToolCapability<ProbeServices>({
+    manifest: {
+      name: 'public-route-probe',
+      version: '0.0.0-test',
+      title: 'Public Route Probe',
+      description: 'A test-only capability that exposes a public extension route.',
+    },
+    instructions: 'Routing: test-only capability. Use nothing here for real work.',
+    tools: [noopTool],
+    createServices(): ProbeServices {
+      return { probe: { starts: 0, stopped: false } };
+    },
+    lifecycle: {
+      stop({ services }) {
+        services.probe.stopped = true;
+      },
+    },
+    publicRoutes: [
+      (router, { services }) => {
+        router.get('/public/slow', async () => {
+          services.probe.starts += 1;
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          return { ok: true };
+        });
+        router.get('/public/quick', () => {
+          services.probe.starts += 1;
+          return { ok: true };
+        });
+      },
+    ],
+  });
+
+  it('refuses a NEW public capability route once draining has begun', async () => {
+    const application = await createAgentToolApplication<ProbeServices>(publicRouteCapability, {
+      logger: createSilentLogger(),
+      readinessCacheMs: 0,
+      drainTimeoutMs: 1000,
+      env: { NODE_ENV: 'test', AUTH_MODE: 'api-key', API_KEYS: generateTestApiKey() },
+    });
+    await application.start();
+
+    try {
+      // Public routes are reachable without credentials while the application is accepting.
+      const before = await application.http.inject({ method: 'GET', url: '/public/quick' });
+      expect(before.statusCode).toBe(200);
+      expect(application.services.probe.starts).toBe(1);
+
+      // Hold the drain window open with a slow public request.
+      const inFlight = application.http.inject({ method: 'GET', url: '/public/slow' });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(application.services.probe.starts).toBe(2);
+
+      const shutdown = application.shutdown();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      // "Public" means unauthenticated, not exempt from draining: this route still touches
+      // capability services that the stop hook is about to tear down.
+      const rejected = await application.http.inject({ method: 'GET', url: '/public/quick' });
+      expect(rejected.statusCode).toBe(503);
+      expect(rejected.json()).toMatchObject({ error: { code: 'not_ready' } });
+      // The handler never began, so nothing touched services mid-teardown.
+      expect(application.services.probe.starts).toBe(2);
+
+      const original = await inFlight;
+      await shutdown;
+
+      expect(original.statusCode).toBe(200);
+      expect(application.services.probe.stopped).toBe(true);
+    } finally {
+      await application.shutdown();
+    }
   });
 });

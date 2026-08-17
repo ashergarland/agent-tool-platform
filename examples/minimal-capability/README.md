@@ -17,6 +17,8 @@ platform has to get right:
 | Readiness contributor               | Readiness aggregation and the 503 path.                                            |
 | Lifecycle hooks                     | `start` and `stop` running at the right points.                                    |
 | `GET /notes/stats`                  | A protected extension route inheriting every platform guard.                       |
+| `GET /notes/slow-stats`             | The shutdown drain and admission guard, held open across teardown.                 |
+| `RouteProbe`                        | Proving the admission guard rejects a request _before_ the handler begins.         |
 | `MINIMAL_*` env schema              | Capability configuration composition and cross-field validation.                   |
 | Telemetry estimator                 | The capability measurement seam merging into baseline invocation telemetry.        |
 

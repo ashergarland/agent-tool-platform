@@ -350,6 +350,10 @@ This exists for genuine cases such as streaming asset endpoints or safe aggregat
 extension routes are a separate, explicit mechanism, so exposing something unauthenticated is
 always a deliberate act.
 
+Both kinds inherit the shutdown admission guard: once the application begins draining, a new
+request to either is refused with `not_ready` before the capability handler runs. "Public" means
+unauthenticated, not exempt from lifecycle.
+
 ---
 
 ## MCP
@@ -396,18 +400,26 @@ into a single signal. `ToolInvocationContext.signal` is never optional.
 `shutdown()` is memoised, so concurrent and repeated calls run teardown exactly once. It proceeds
 in a deliberate order:
 
-1. **Begin draining.** New invocations are refused with `not_ready`, and the application signal
-   aborts so every in-flight call observes cancellation immediately.
+1. **Begin draining.** The application signal aborts so every in-flight call observes cancellation,
+   and an **admission guard** starts refusing new capability work with `not_ready` (503). The guard
+   is platform-owned and covers the whole protected scope plus every public capability route
+   scope — a capability cannot forget it or opt out.
 2. **Wait for in-flight work**, bounded by `SHUTDOWN_GRACE_MS`. The runtime tracks admitted
-   invocations, so this waits for actual work rather than for a fixed delay. A handler that ignores
-   its cancellation signal cannot hold the process open: the wait times out, logs a warning naming
-   the number of stuck invocations, and proceeds.
+   invocations _and_ in-flight HTTP requests, so this waits for actual work rather than for a fixed
+   delay. A handler that ignores its cancellation signal cannot hold the process open: the wait
+   times out, logs a warning, and proceeds.
 3. **Run the capability `stop` hook.** Only now, so a handler is never torn out from under a call
    still using the domain resources it is about to destroy.
 4. **Close the listener.**
 
-Step 3 is the point of the ordering. Running `stop()` first is what produces confusing
-use-after-teardown failures during shutdown.
+Steps 1 and 3 together are the point. Waiting alone is not enough: request tracking only protects
+work that is _already_ in flight, so without the admission guard a request arriving after the
+tracker reaches zero would begin against services that teardown is about to destroy. Admission has
+to be closed at the door, because arrival is unbounded in time.
+
+The core operational endpoints — `/health`, `/ready`, `/version`, `/openapi.json` — stay available
+throughout, so an orchestrator can still observe a draining replica. `/ready` reports `503` with a
+`draining` check while teardown runs.
 
 When `startAgentToolApplication` installs signal handlers, a clean shutdown exits `0` and a failed
 or timed-out shutdown exits non-zero, so an orchestrator can tell the difference.

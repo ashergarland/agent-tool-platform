@@ -76,7 +76,28 @@ export class NoteStore {
   }
 }
 
+/**
+ * Counts route-handler entries.
+ *
+ * This exists so a test can distinguish "the platform refused the request" from "the handler ran
+ * and then failed". Proving the admission guard rejects a request *before* any capability code
+ * begins requires an observable at the handler's first line; a response status alone cannot tell
+ * the two apart.
+ */
+export class RouteProbe {
+  private starts = 0;
+
+  public get startCount(): number {
+    return this.starts;
+  }
+
+  public enter(): void {
+    this.starts += 1;
+  }
+}
+
 export interface MinimalServices {
   readonly notes: NoteStore;
   readonly mutations: MutationGate;
+  readonly routeProbe: RouteProbe;
 }

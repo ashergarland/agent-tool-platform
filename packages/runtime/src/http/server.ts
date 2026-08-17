@@ -14,7 +14,7 @@ import type {
 } from '../capability/types.js';
 import type { PlatformConfig } from '../config/platform.js';
 import { resolveRequestId } from '../context/request-id.js';
-import { AppError, toAppError } from '../errors.js';
+import { AppError, notReady, toAppError } from '../errors.js';
 import type { ApplicationLifecycle } from '../lifecycle/state.js';
 import type { ReadinessAggregator, ReadinessReport } from '../lifecycle/readiness.js';
 import { handleMcpHttpRequest } from '../mcp/http.js';
@@ -179,6 +179,40 @@ export const createHttpServer = <TConfig extends PlatformConfig, TServices>(
 
   registerErrorHandler(app, config);
 
+  /**
+   * Admission guard for capability work.
+   *
+   * `RequestTracker` only protects requests that are *already* in flight. Without this guard there
+   * is a race: once the tracker reaches zero, shutdown proceeds to the capability `stop` hook, but
+   * the listener is still open, so a request arriving in that window begins against domain
+   * services that are about to be destroyed.
+   *
+   * Closing that window has to happen at admission rather than in the drain loop, because no
+   * amount of waiting can help — the arrival is unbounded in time.
+   *
+   * Two ordering facts make this airtight:
+   *
+   *  - Fastify runs root-instance hooks before encapsulated scope hooks, so `RequestTracker.enter`
+   *    has already counted any request that reaches this guard. A request that passes is therefore
+   *    guaranteed to be visible to `waitForDrain`, with no gap between the check and the count.
+   *  - `beginDraining()` flips `accepting` synchronously, before shutdown awaits anything, so
+   *    every request admitted afterwards is rejected here.
+   *
+   * Capabilities never install this: it is applied to the whole protected scope and to every
+   * public capability scope, so a capability cannot forget it or opt out.
+   */
+  const refuseWhenDraining = (
+    _request: FastifyRequest,
+    _reply: FastifyReply,
+    done: (error?: Error) => void,
+  ): void => {
+    done(
+      lifecycle.accepting
+        ? undefined
+        : notReady('The tool server is shutting down and is not accepting new work'),
+    );
+  };
+
   /* --------------------------------------------------------------- public */
 
   app.get('/health', () => ({
@@ -235,6 +269,9 @@ export const createHttpServer = <TConfig extends PlatformConfig, TServices>(
 
   for (const register of deps.publicRoutes ?? []) {
     void app.register(async (publicApp) => {
+      // Public only means unauthenticated, not exempt from draining: a public capability route
+      // still touches capability services and must not begin once teardown has started.
+      publicApp.addHook('onRequest', refuseWhenDraining);
       await register(publicApp, routeContext);
     });
   }
@@ -242,6 +279,10 @@ export const createHttpServer = <TConfig extends PlatformConfig, TServices>(
   /* ------------------------------------------------------------ protected */
 
   void app.register(async (protectedApp) => {
+    // Registered before authentication so a draining server rejects new work early rather than
+    // spending credential verification and rate-limit budget on a request it will not serve.
+    protectedApp.addHook('onRequest', refuseWhenDraining);
+
     /**
      * Authentication only reads a header, so it runs at `onRequest` — before body parsing. That
      * ordering matters: a valid caller is charged solely to its own principal budget, while
