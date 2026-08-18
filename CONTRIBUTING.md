@@ -25,6 +25,7 @@ npm run typecheck
 npm run test:coverage
 npm run build
 npm run package:smoke
+npm run release:check
 ```
 
 Everything is validated by `npm run` scripts that CI calls directly, so a green local run means a
@@ -61,5 +62,14 @@ through `additionalEnv` or `secretRefs` from the capability's own composition.
 
 ## Publishing
 
-Nothing in this repository is published in v0, and every package is `private: true`. The metadata
-check fails if that changes accidentally.
+`@agent-tool-platform/runtime` and `@agent-tool-platform/testkit` are publishable public packages;
+the repository root and `examples/minimal-capability` are `private: true` and the metadata check
+fails if that changes. Neither package has been published yet.
+
+For v0 the two packages are versioned in lockstep and the testkit depends on the runtime at exactly
+that version. Change both `version` fields and the testkit's runtime dependency in the same commit;
+`npm run release:check` fails if the three values disagree.
+
+Nothing publishes from CI. `.github/workflows/publish.yml` is `workflow_dispatch` only and is the
+only file permitted to contain a publish command. The release process, including the one-time manual
+bootstrap of 0.1.0, is documented in [`docs/releasing.md`](docs/releasing.md).

@@ -29,7 +29,7 @@ export default tseslint.config(
       '**/dist/**',
       '**/coverage/**',
       'eslint.config.js',
-      'scripts/*.mjs',
+      'scripts/**/*.mjs',
       'packages/runtime/bin/*.js',
       'openapi.fixture.json',
     ],

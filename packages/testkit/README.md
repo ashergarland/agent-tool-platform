@@ -5,7 +5,16 @@ Reusable conformance suites that prove a capability satisfies the agent tool pla
 These suites test **platform invariants only**. No suite asserts anything about ASTs, repositories,
 Azure resources, documents, or images — domain behaviour stays in the capability's own tests.
 
-> Not published. `private: true` for the v0 foundation phase.
+> **Not yet on npm.** This package is prepared for publication as a public package
+> (`@agent-tool-platform/testkit`, version 0.1.0), but 0.1.0 has not been published. The install
+> command below works once the first release is out; see [`docs/releasing.md`](../../docs/releasing.md).
+
+```bash
+npm install --save-dev @agent-tool-platform/testkit
+```
+
+The testkit depends on `@agent-tool-platform/runtime` at exactly the same version, so for v0 the two
+are installed as a matched pair.
 
 ## Why it exists
 

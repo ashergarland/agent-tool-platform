@@ -6,7 +6,13 @@ This package owns transports, contracts, and safety primitives. It contains no d
 never will: the moment it learns what an AST, a repository, or an Azure resource is, it stops being
 a platform.
 
-> Not published. `private: true` for the v0 foundation phase.
+> **Not yet on npm.** This package is prepared for publication as a public package
+> (`@agent-tool-platform/runtime`, version 0.1.0), but 0.1.0 has not been published. The install
+> command below works once the first release is out; see [`docs/releasing.md`](../../docs/releasing.md).
+
+```bash
+npm install @agent-tool-platform/runtime
+```
 
 ## Import surface
 
