@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Format, lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Coverage thresholds live in vitest.config.ts and fail the run on their own.
+      - name: Unit tests and conformance suites with coverage
+        run: npm run test:coverage
+
+      - name: Build every package
+        run: npm run build
+
+      # Proves consumers get what the exports map promises, and that dist actually loads.
+      - name: Package layout smoke test
+        run: npm run package:smoke
+
+      - name: Generate the fixture OpenAPI document
+        run: npm run openapi:emit
+
+      - name: Validate repository metadata
+        run: npm run metadata:validate
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixture-openapi
+          path: openapi.fixture.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/lcov.info
+
+  bicep:
+    name: Bicep build and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bicep
+        run: az bicep install
+
+      # Every module and the example composition must compile and lint. No deployment is performed:
+      # `az deployment group validate` needs a real subscription, and this repository deploys
+      # nothing.
+      - name: Build and lint every module
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS= read -r file; do
+            echo "::group::$file"
+            az bicep build --file "$file" --stdout > /dev/null || status=1
+            az bicep lint --file "$file" || status=1
+            echo "::endgroup::"
+          done < <(find infra -name '*.bicep' | sort)
+          exit "$status"

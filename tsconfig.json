@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "types": ["node", "vitest/globals"],
+    "paths": {
+      "@agent-tool-platform/runtime": ["./packages/runtime/src/index.ts"],
+      "@agent-tool-platform/runtime/*": ["./packages/runtime/src/*"],
+      "@agent-tool-platform/testkit": ["./packages/testkit/src/index.ts"],
+      "@agent-tool-platform/testkit/*": ["./packages/testkit/src/*"],
+      "@agent-tool-platform/example-minimal-capability": [
+        "./examples/minimal-capability/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "packages/*/src/**/*.ts",
+    "examples/*/src/**/*.ts",
+    "tests/**/*.ts",
+    "scripts/**/*.ts",
+    "vitest.config.ts"
+  ]
+}

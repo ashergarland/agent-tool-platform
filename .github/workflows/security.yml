@@ -1,0 +1,61 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, so a newly disclosed advisory is found before the next pull request happens to run.
+    - cron: '19 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    # No `if:` guard here on purpose. A conditional that excludes `schedule` silently disables the
+    # scheduled run, which is the only run that catches an advisory published after a merge.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Runtime dependencies are what a consumer installs, so they are audited strictly.
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=high
+      # Development dependencies cannot reach a consumer, so they are reported without failing.
+      - name: Report development dependency advisories
+        continue-on-error: true
+        run: npm audit --audit-level=critical
+
+  secrets:
+    name: Secret scanning
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-config.yml
+      - uses: github/codeql-action/analyze@v4

@@ -1,0 +1,51 @@
+# CodeQL configuration for agent-tool-platform.
+#
+# Every exclusion below is a reasoned decision about a specific pattern, not a way to make the
+# dashboard quiet. Each one names the alert, why it fires, and what actually provides the
+# protection the rule is looking for.
+
+name: agent-tool-platform
+
+paths-ignore:
+  # Test sources are never shipped: both packages declare `files: ["dist", "bin", "README.md"]`,
+  # so nothing under `tests/` can reach a consumer. They also deliberately construct credentials
+  # and log them into redacted positions in order to prove redaction works, which every
+  # credential-handling rule reads as a finding.
+  - tests
+  - '**/dist'
+  - '**/coverage'
+
+query-filters:
+  # js/insufficient-password-hash — packages/runtime/src/auth/credentials.ts
+  #
+  # The rule expects a slow KDF. That is the right requirement for stored password hashes and the
+  # wrong one here:
+  #
+  #   * These are machine-generated API tokens, not user-chosen passwords, and
+  #     `assessSecretStrength` refuses anything below 32 characters and 96 bits of estimated
+  #     entropy at configuration time, so no wordlist reaches them.
+  #   * The digest is never stored, transmitted, or written to disk. It exists inside one process
+  #     for the duration of one comparison, so there is no artefact to crack offline.
+  #   * The HMAC key is 32 fresh random bytes per instance, so a digest cannot be recomputed
+  #     elsewhere even if one leaked.
+  #   * A deliberately slow KDF run per request would hand an unauthenticated caller a CPU
+  #     exhaustion lever against a container sized for a fraction of a core.
+  #
+  # The fixed-width keyed digest exists to remove the timing and length oracles, which is the
+  # threat that actually applies. See the module comment for the full argument.
+  - exclude:
+      id: js/insufficient-password-hash
+
+  # js/missing-rate-limiting — packages/runtime/src/http/server.ts
+  #
+  # Every protected route *is* rate limited. Authentication and both rate-limit budgets are applied
+  # by a single `onRequest` hook on the enclosing plugin scope, so they cover the tool catalogue,
+  # tool invocation, the MCP endpoints, and every capability extension route without any of them
+  # opting in.
+  #
+  # The rule only recognises a small set of rate-limiting middleware packages and cannot see a
+  # hand-written hook, so it reports these handlers as unlimited. The behaviour is covered by tests
+  # instead: `tests/http.test.ts` asserts the per-principal budget, the pre-auth abuse budget, and
+  # the `retry-after` response, and `runHttpConformance` re-checks it for every capability.
+  - exclude:
+      id: js/missing-rate-limiting
