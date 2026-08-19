@@ -18,8 +18,8 @@ import {
  *   channel, and every other manifest in the workspace stays private,
  * - every workspace package carries the same version as the root,
  * - no placeholder or fake-domain content has crept into a manifest,
- * - no documentation asserts that the packages are already on npm, because preparing a release is
- *   not the same as having published one,
+ * - package identities and the testkit's exact runtime dependency remain internally consistent,
+ * - documentation uses the real package names and does not claim they are unpublished,
  * - no `server.json` has appeared here, which would apply capability semantics to a library,
  * - and the shared capability validator still accepts a truthful document and rejects a fake one,
  *   which is the contract capability repositories consume through `agent-tool-validate-metadata`.
@@ -38,6 +38,7 @@ interface Manifest {
   readonly homepage?: string;
   readonly repository?: { readonly url?: string };
   readonly publishConfig?: { readonly access?: string; readonly registry?: string };
+  readonly dependencies?: Record<string, string>;
 }
 
 /** The only manifests in this workspace that are meant to reach a registry. */
@@ -59,6 +60,20 @@ const exists = async (path: string): Promise<boolean> => {
 const failures: string[] = [];
 
 const root = await load('package.json');
+const runtime = await load('packages/runtime/package.json');
+const testkit = await load('packages/testkit/package.json');
+
+if (runtime.name !== '@agent-tool-platform/runtime') {
+  failures.push(`packages/runtime/package.json: unexpected package name ${runtime.name}`);
+}
+if (testkit.name !== '@agent-tool-platform/testkit') {
+  failures.push(`packages/testkit/package.json: unexpected package name ${testkit.name}`);
+}
+if (testkit.dependencies?.[runtime.name] !== runtime.version) {
+  failures.push(
+    `packages/testkit/package.json: must depend exactly on ${runtime.name}@${runtime.version}`,
+  );
+}
 
 for (const path of [...privatePackages, ...publishablePackages]) {
   const manifest = await load(path);
@@ -111,21 +126,6 @@ if (await exists('server.json')) {
   );
 }
 
-/**
- * PRE-PUBLICATION ONLY.
- *
- * Preparing a release is not the same as having published one. A version badge or a package page
- * link asserts that something is already on npm, so neither may appear until it is true.
- *
- * This block expires. Once 0.1.0 is actually published the rule becomes wrong — it will reject the
- * very README edits that make the repository truthful again — so it must be removed, or inverted
- * into a check that a claimed version matches the manifests, as part of the one-time transition
- * described in `docs/releasing.md`. Nothing else in this file is tied to the pre-publication state.
- */
-const claimPatterns: readonly (readonly [RegExp, string])[] = [
-  [/shields\.io\/npm\//u, 'an npm version or download badge'],
-  [/npmjs\.com\/package\/@agent-tool-platform/u, 'a link to an npm package page'],
-];
 const documentation = [
   'README.md',
   'docs/releasing.md',
@@ -135,12 +135,21 @@ const documentation = [
 for (const path of documentation) {
   if (!(await exists(path))) continue;
   const contents = await readFile(resolve(path), 'utf8');
-  for (const [pattern, description] of claimPatterns) {
-    if (pattern.test(contents)) {
-      failures.push(
-        `${path}: contains ${description}, which claims a publication that has not happened`,
-      );
-    }
+  if (/packages? (?:has|have) not been published|not (?:yet )?published on npm/iu.test(contents)) {
+    failures.push(`${path}: still claims that the packages are unpublished`);
+  }
+}
+
+const installationDocumentation: readonly (readonly [string, string])[] = [
+  ['README.md', 'npm install @agent-tool-platform/runtime'],
+  ['README.md', 'npm install -D @agent-tool-platform/testkit'],
+  ['packages/runtime/README.md', 'npm install @agent-tool-platform/runtime'],
+  ['packages/testkit/README.md', 'npm install -D @agent-tool-platform/testkit'],
+];
+for (const [path, command] of installationDocumentation) {
+  const contents = await readFile(resolve(path), 'utf8');
+  if (!contents.includes(command)) {
+    failures.push(`${path}: must document \`${command}\``);
   }
 }
 
@@ -206,6 +215,6 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    'Workspace metadata is consistent: the two platform packages are publishable and truthful, everything else stays private, no documentation claims an npm publication that has not happened, and the shared capability validator still behaves correctly.\n',
+    'Workspace metadata is consistent: the two platform packages are publishable, versioned in lockstep, documented with their real npm identities, everything else stays private, and the shared capability validator still behaves correctly.\n',
   );
 }
