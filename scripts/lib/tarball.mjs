@@ -31,7 +31,7 @@ const npmCliPath = () => {
   return candidates.find((candidate) => existsSync(candidate));
 };
 
-const npmCommand = (args, options) => {
+export const npmCommand = (args, options) => {
   const cli = npmCliPath();
   if (cli) return execFileSync(process.execPath, [cli, ...args], options);
   return execFileSync('npm', args, { ...options, shell: process.platform === 'win32' });

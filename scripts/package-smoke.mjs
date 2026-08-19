@@ -12,7 +12,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { extractTarball, packPackage } from './lib/tarball.mjs';
+import { extractTarball, npmCommand, packPackage } from './lib/tarball.mjs';
 
 /**
  * Publication smoke test.
@@ -30,8 +30,9 @@ import { extractTarball, packPackage } from './lib/tarball.mjs';
  * Testkit is installed against the **packed** runtime, never the workspace one, because that is the
  * relationship npm creates for a real consumer.
  *
- * No network access is required: tarballs are packed locally and third-party dependencies are
- * linked from the already-installed workspace tree.
+ * Import and type checks stay offline by linking third-party dependencies from the workspace. The
+ * executable check performs a real npm install so clean consumers also prove dependency resolution
+ * and npm's generated command wiring.
  */
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
@@ -84,6 +85,11 @@ const publishable = [
   { directory: 'packages/runtime', name: '@agent-tool-platform/runtime' },
   { directory: 'packages/testkit', name: '@agent-tool-platform/testkit' },
 ];
+
+const runtimeBinary = {
+  name: 'agent-tool-validate-metadata',
+  target: 'bin/validate-metadata.js',
+};
 
 /**
  * What a consumer must receive, and what a consumer must never receive. Maps are forbidden because
@@ -321,6 +327,80 @@ const exerciseConsumer = (consumer, packed) => {
   }
 };
 
+const exerciseRuntimeBinary = (artefact) => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'atp-runtime-cli-'));
+  writeFileSync(
+    join(root, 'package.json'),
+    `${JSON.stringify({ name: 'atp-runtime-cli-consumer', private: true })}\n`,
+  );
+
+  try {
+    npmCommand(
+      [
+        'install',
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund',
+        '--no-package-lock',
+        '--no-save',
+        artefact.tarball,
+      ],
+      { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+
+    const serverPath = join(root, 'server.json');
+    const manifestPath = join(root, 'capability-package.json');
+    writeFileSync(
+      serverPath,
+      `${JSON.stringify({
+        $schema: 'https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json',
+        name: 'io.github.example-owner/agent-tool-server-sample',
+        description: 'Representative metadata for the installed runtime executable smoke test.',
+        version: '1.2.3',
+        repository: {
+          url: 'https://github.com/example-owner/agent-tool-server-sample',
+          source: 'github',
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({
+        name: 'agent-tool-server-sample',
+        version: '1.2.3',
+        private: true,
+      })}\n`,
+    );
+
+    const output = npmCommand(
+      [
+        'exec',
+        '--offline',
+        '--',
+        runtimeBinary.name,
+        '--server',
+        serverPath,
+        '--package',
+        manifestPath,
+      ],
+      { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    if (!output.includes('Metadata is consistent, truthful, and free of placeholders.')) {
+      fail(`${runtimeBinary.name}: installed command produced unexpected output: ${output.trim()}`);
+    } else {
+      note(`${runtimeBinary.name}: npm-installed command validated representative metadata`);
+    }
+  } catch (error) {
+    fail(
+      `${runtimeBinary.name}: npm could not install and execute the packed command:\n${
+        error.stderr || error.stdout || error.message
+      }`,
+    );
+  }
+
+  return { root };
+};
+
 const staging = mkdtempSync(join(realpathSync(tmpdir()), 'atp-pack-'));
 const consumers = [];
 const packed = {};
@@ -376,6 +456,25 @@ try {
     // Emitted JavaScript and declarations must never point back at sources that are not published.
     const extracted = join(staging, `extracted${name.replace(/[@/]/gu, '-')}`);
     extractTarball(artefact.tarball, extracted);
+
+    if (name === '@agent-tool-platform/runtime') {
+      const packedManifest = readManifest(join(extracted, 'package.json'));
+      const binTarget = packedManifest.bin?.[runtimeBinary.name];
+      if (binTarget !== runtimeBinary.target) {
+        fail(
+          `${name}: packed manifest bin.${runtimeBinary.name} must be ${runtimeBinary.target}, ` +
+            `found ${binTarget === undefined ? 'no mapping' : JSON.stringify(binTarget)}`,
+        );
+      } else {
+        const executable = join(extracted, binTarget);
+        if (!shipped.has(binTarget) || !existsSync(executable)) {
+          fail(`${name}: packed bin target ${binTarget} does not exist in the tarball`);
+        } else if (!readFileSync(executable, 'utf8').startsWith('#!/usr/bin/env node\n')) {
+          fail(`${name}: packed bin target ${binTarget} does not begin with the Node shebang`);
+        }
+      }
+    }
+
     for (const file of artefact.files) {
       if (!/\.(js|d\.ts)$/u.test(file)) continue;
       const contents = readFileSync(join(extracted, file), 'utf8');
@@ -398,6 +497,8 @@ try {
   }
 
   if (failures.length === 0) {
+    consumers.push(exerciseRuntimeBinary(packed['@agent-tool-platform/runtime']));
+
     // Runtime must stand alone. Testkit must consume the packed runtime, not the workspace one.
     const runtimeOnly = { '@agent-tool-platform/runtime': packed['@agent-tool-platform/runtime'] };
     const runtimeConsumer = createConsumer('runtime', runtimeOnly, '@agent-tool-platform/runtime');
