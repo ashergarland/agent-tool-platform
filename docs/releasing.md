@@ -82,8 +82,13 @@ npm view @agent-tool-platform/runtime@0.1.0 version
 
 > **Order matters. Do not publish the testkit first.** The testkit declares
 > `"@agent-tool-platform/runtime": "0.1.0"` as a normal registry dependency. If the testkit is
-> published while that runtime version does not exist, every install of the testkit fails, and the
-> only fix is another version, because npm versions are immutable and cannot be overwritten.
+> published while that runtime version does not exist, the testkit is **temporarily uninstallable**:
+> every `npm install` of it fails to resolve its dependency until `@agent-tool-platform/runtime@0.1.0`
+> is itself published, at which point existing installs start working with no change to the testkit.
+>
+> It is recoverable, not fatal — but it is a window in which the package on npm is broken for anyone
+> who tries it, and it cannot be tidied away afterwards, because the published version cannot be
+> withdrawn or overwritten. Publishing the runtime first avoids the window entirely.
 
 ### Publish the testkit SECOND
 
@@ -100,10 +105,49 @@ npm view @agent-tool-platform/testkit@0.1.0 dependencies
 
 The second command must show `@agent-tool-platform/runtime: 0.1.0`.
 
-### After publishing
+### After publishing: the one-time repository transition
 
-Update the README status line so it reflects reality: 0.1.0 is available from npm, and the install
-instructions now work.
+This repository currently asserts, in code and in tests, that the packages are **not** on npm. Those
+assertions are correct today and become false the moment 0.1.0 is published, so the bootstrap is not
+finished until they are updated.
+
+Do this as a single follow-up commit or pull request, immediately after the manual publish. Until it
+lands, the repository is telling readers something untrue.
+
+1. **Root [`README.md`](../README.md)** — change the status callout near the top, which currently
+   says the packages are prepared for publication but not published, and remove the warning above
+   the install commands that says they will fail with a 404.
+2. **[`packages/runtime/README.md`](../packages/runtime/README.md)** and
+   **[`packages/testkit/README.md`](../packages/testkit/README.md)** — replace the "Not yet on npm"
+   callout in each with the published version.
+3. **This document** — record the bootstrap as completed (which version, roughly when), and change
+   the note at the top that says neither package has been published. Section A stays as the
+   historical record of how the first release happened; it is not repeated for later versions.
+4. **[`scripts/validate-metadata.ts`](../scripts/validate-metadata.ts)** — the `claimPatterns` block
+   rejects npm version badges and links to npm package pages anywhere in the documentation. That rule
+   exists only to prevent claiming a publication that had not happened. Once 0.1.0 is public the rule
+   is wrong, and it will block the README edits above. Remove it, or invert it into a check that a
+   claimed version actually matches the manifests.
+5. **[`tests/packaging.test.ts`](../tests/packaging.test.ts)** — the
+   `does not claim the packages are already published` test asserts the pre-publication wording in
+   both the README and this document. Update it to assert the post-publication wording, or delete it
+   if there is no longer a claim worth pinning. Everything else in that file — metadata, tarball
+   contents, workflow guarantees — stays exactly as it is and must keep passing.
+6. **Run the full suite** before opening the pull request:
+
+   ```bash
+   npm run format:check
+   npm run lint
+   npm run typecheck
+   npm run test:coverage
+   npm run build
+   npm run package:smoke
+   npm run release:check
+   npm run metadata:validate
+   ```
+
+Nothing else changes. In particular the package manifests, the publish workflow, and the version
+stay untouched: this transition is about statements the repository makes, not about what it ships.
 
 ---
 

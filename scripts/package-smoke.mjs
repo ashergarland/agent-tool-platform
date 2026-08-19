@@ -43,6 +43,7 @@ const fail = (message) => failures.push(message);
 const note = (message) => process.stdout.write(`${message}\n`);
 
 const readManifest = (path) => JSON.parse(readFileSync(path, 'utf8'));
+const rootLicense = readFileSync(join(repositoryRoot, 'LICENSE'));
 
 /** Exports the README documents. A rename here is a breaking change for every capability. */
 const documentedExports = {
@@ -88,8 +89,12 @@ const publishable = [
  * What a consumer must receive, and what a consumer must never receive. Maps are forbidden because
  * they reference `src/`, which is deliberately not published: a map pointing at a path that does
  * not exist in the tarball is worse than no map at all.
+ *
+ * LICENSE is required, not merely permitted. A package whose manifest says `"license": "MIT"` but
+ * whose tarball carries no license text leaves the recipient without the grant itself, and npm's
+ * automatic inclusion of a root-level LICENSE is a convenience, not a guarantee worth relying on.
  */
-const requiredFiles = ['package.json', 'README.md', 'dist/index.js', 'dist/index.d.ts'];
+const requiredFiles = ['package.json', 'README.md', 'LICENSE', 'dist/index.js', 'dist/index.d.ts'];
 const forbidden = [
   [/^src\//u, 'TypeScript sources'],
   [/\.map$/u, 'source or declaration maps that would point at unpublished sources'],
@@ -376,6 +381,16 @@ try {
       const contents = readFileSync(join(extracted, file), 'utf8');
       if (/['"][^'"]*\.\.\/src\//u.test(contents)) {
         fail(`${name}: ${file} references an unpublished source path`);
+      }
+    }
+
+    // The shipped license must be the repository's license, compared as bytes rather than as text:
+    // a re-worded, re-wrapped, or differently line-ended copy is a different legal document, and a
+    // drifted per-package license is exactly the kind of thing nobody notices until it matters.
+    if (shipped.has('LICENSE')) {
+      const shippedLicense = readFileSync(join(extracted, 'LICENSE'));
+      if (!shippedLicense.equals(rootLicense)) {
+        fail(`${name}: the shipped LICENSE is not byte-identical to the repository LICENSE`);
       }
     }
 

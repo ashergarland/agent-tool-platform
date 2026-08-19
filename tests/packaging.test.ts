@@ -21,6 +21,9 @@ import { load } from 'js-yaml';
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const read = (relativePath: string): string =>
   readFileSync(join(repositoryRoot, relativePath), 'utf8');
+const readBytes = (relativePath: string): Buffer =>
+  readFileSync(join(repositoryRoot, relativePath));
+const rootLicense = readBytes('LICENSE');
 
 interface PackageManifest {
   readonly name: string;
@@ -74,10 +77,20 @@ describe('publishable package metadata', () => {
       expect(manifest.keywords?.length).toBeGreaterThan(0);
       expect(manifest.files).toContain('dist');
       expect(manifest.files).toContain('README.md');
+      expect(manifest.files).toContain('LICENSE');
       expect(manifest.exports?.['.']).toEqual({
         types: './dist/index.d.ts',
         import: './dist/index.js',
       });
+    },
+  );
+
+  it.each(publishable)(
+    '%s carries the repository license verbatim',
+    (_label, _manifest, _name, directory) => {
+      // Compared as bytes: a re-wrapped or re-worded copy is a different legal document, and
+      // `"license": "MIT"` in a manifest is a claim about text the consumer must actually receive.
+      expect(readBytes(`${directory}/LICENSE`)).toEqual(rootLicense);
     },
   );
 
@@ -162,6 +175,33 @@ describe('release workflow', () => {
 
   it('runs on a GitHub-hosted runner, which npm requires for OIDC', () => {
     expect(String(publishJob['runs-on'])).toMatch(/^ubuntu-/u);
+  });
+
+  it('installs a pinned npm rather than whatever is newest that day', () => {
+    const step = steps.find((candidate) => (candidate.run ?? '').includes('npm install -g'));
+    expect(step, 'the workflow must install a specific npm').toBeDefined();
+
+    // `npm@latest` is already a major ahead of the pin, so an unpinned install would silently
+    // change the tool that performs the release.
+    expect(step?.run).not.toMatch(/npm@latest|npm@next|npm@\^|npm@~|npm@\*/u);
+
+    const pinned = step?.env?.NPM_VERSION;
+    expect(pinned, 'the npm version must be pinned exactly').toMatch(/^\d+\.\d+\.\d+$/u);
+    expect(step?.run).toContain('npm install -g "npm@${NPM_VERSION}"');
+    // Installing the pin is not enough; the runner must actually be running it.
+    expect(step?.run).toContain('"$installed" != "$NPM_VERSION"');
+
+    // The trusted-publishing floor survives the pin, so lowering the pin fails here rather than
+    // at the publish step with an authentication error.
+    const minimum = step?.env?.NPM_TRUSTED_PUBLISHING_MINIMUM;
+    expect(minimum).toBe('11.5.1');
+    const asNumbers = (value: string): number[] => value.split('.').map(Number);
+    const [pinnedMajor = 0, pinnedMinor = 0, pinnedPatch = 0] = asNumbers(pinned ?? '0.0.0');
+    const [minMajor = 0, minMinor = 0, minPatch = 0] = asNumbers(minimum ?? '0.0.0');
+    expect(
+      pinnedMajor * 1e6 + pinnedMinor * 1e3 + pinnedPatch,
+      `pinned npm ${pinned} is below the trusted publishing minimum ${minimum}`,
+    ).toBeGreaterThanOrEqual(minMajor * 1e6 + minMinor * 1e3 + minPatch);
   });
 
   it('carries no npm write credential of any kind', () => {
@@ -261,6 +301,33 @@ describe('release documentation', () => {
     expect(releasing).toMatch(/Do not publish the testkit first/iu);
   });
 
+  it('describes publishing the testkit first as temporary breakage, not a lost version', () => {
+    // Publishing out of order leaves the testkit unresolvable only until the runtime version it
+    // depends on is published; it does not permanently burn the version. Overstating that would
+    // push a maintainer into an unnecessary bump, which is exactly what the lockstep rule forbids.
+    expect(releasing).toMatch(/temporarily uninstallable/iu);
+    expect(releasing).toMatch(/until .*runtime@0\.1\.0.*is itself published/su);
+    expect(releasing).not.toMatch(/the only fix is another version/iu);
+  });
+
+  it('documents the one-time repository transition that follows the bootstrap', () => {
+    const transition = releasing.slice(releasing.indexOf('the one-time repository transition'));
+    expect(transition.length).toBeGreaterThan(0);
+    for (const target of [
+      'README.md',
+      'packages/runtime/README.md',
+      'packages/testkit/README.md',
+      'scripts/validate-metadata.ts',
+      'tests/packaging.test.ts',
+      'npm run test:coverage',
+      'npm run package:smoke',
+      'npm run release:check',
+      'npm run metadata:validate',
+    ]) {
+      expect(transition, `the transition must name ${target}`).toContain(target);
+    }
+  });
+
   it('documents the npm-side Trusted Publisher configuration', () => {
     for (const value of [
       'GitHub Actions',
@@ -275,6 +342,9 @@ describe('release documentation', () => {
     expect(releasing).toMatch(/two-factor authentication and disallow tokens/iu);
   });
 
+  // PRE-PUBLICATION ONLY. This assertion becomes false the moment 0.1.0 is published and must be
+  // updated or deleted in the follow-up transition described in `docs/releasing.md`. It is the only
+  // test in this file that expires; everything else above holds for every future release.
   it('does not claim the packages are already published', () => {
     expect(releasing).toMatch(/has been published|has not been published|not been published/u);
     for (const document of [releasing, readme]) {

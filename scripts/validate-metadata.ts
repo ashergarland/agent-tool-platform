@@ -112,8 +112,15 @@ if (await exists('server.json')) {
 }
 
 /**
+ * PRE-PUBLICATION ONLY.
+ *
  * Preparing a release is not the same as having published one. A version badge or a package page
  * link asserts that something is already on npm, so neither may appear until it is true.
+ *
+ * This block expires. Once 0.1.0 is actually published the rule becomes wrong — it will reject the
+ * very README edits that make the repository truthful again — so it must be removed, or inverted
+ * into a check that a claimed version matches the manifests, as part of the one-time transition
+ * described in `docs/releasing.md`. Nothing else in this file is tied to the pre-publication state.
  */
 const claimPatterns: readonly (readonly [RegExp, string])[] = [
   [/shields\.io\/npm\//u, 'an npm version or download badge'],

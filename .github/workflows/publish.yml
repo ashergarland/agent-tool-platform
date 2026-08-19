@@ -59,17 +59,30 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: npm
 
-      - name: Ensure npm supports trusted publishing
+      - name: Install a pinned npm that supports trusted publishing
+        env:
+          # Pinned deliberately. `npm@latest` would make every release depend on whatever npm
+          # published that morning, including a major version bump, which is the opposite of what a
+          # release job should be: `latest` is already npm 12. This pin is bounded to the npm 11
+          # line and is raised in a commit, reviewed like any other change, never silently.
+          NPM_VERSION: '11.19.0'
+          # OIDC trusted publishing was added in npm 11.5.1. The pin above is well past it, but the
+          # floor is still asserted below so that lowering the pin fails loudly rather than
+          # producing an ENEEDAUTH at the publish step.
+          NPM_TRUSTED_PUBLISHING_MINIMUM: '11.5.1'
         run: |
           set -euo pipefail
-          npm install -g npm@latest
+          npm install -g "npm@${NPM_VERSION}"
           installed="$(npm --version)"
-          required="11.5.1"
-          echo "npm $installed (trusted publishing requires >= $required)"
-          if [ "$(printf '%s\n%s\n' "$required" "$installed" | sort -V | head -n1)" != "$required" ]; then
-            echo "::error::npm $installed cannot perform OIDC trusted publishing; $required or newer is required."
+          if [ "$installed" != "$NPM_VERSION" ]; then
+            echo "::error::Expected npm $NPM_VERSION but the runner has $installed."
             exit 1
           fi
+          if [ "$(printf '%s\n%s\n' "$NPM_TRUSTED_PUBLISHING_MINIMUM" "$installed" | sort -V | head -n1)" != "$NPM_TRUSTED_PUBLISHING_MINIMUM" ]; then
+            echo "::error::npm $installed cannot perform OIDC trusted publishing; $NPM_TRUSTED_PUBLISHING_MINIMUM or newer is required."
+            exit 1
+          fi
+          echo "npm $installed (trusted publishing requires >= $NPM_TRUSTED_PUBLISHING_MINIMUM)"
 
       - run: npm ci
 
