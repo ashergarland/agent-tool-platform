@@ -40,9 +40,15 @@ jobs:
       - name: Build every package
         run: npm run build
 
-      # Proves consumers get what the exports map promises, and that dist actually loads.
-      - name: Package layout smoke test
+      # Proves consumers get what the exports map promises: both packages are packed, installed into
+      # throwaway projects outside this workspace, and imported there. Deterministic and offline; it
+      # never authenticates to npm and never publishes.
+      - name: Package publication smoke test
         run: npm run package:smoke
+
+      # Version lockstep, exact testkit -> runtime dependency, and publishable manifest layout.
+      - name: Release consistency check
+        run: npm run release:check
 
       - name: Generate the fixture OpenAPI document
         run: npm run openapi:emit

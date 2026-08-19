@@ -4,9 +4,29 @@
   "description": "Reusable conformance helpers that prove a capability satisfies the agent tool platform contracts.",
   "license": "MIT",
   "type": "module",
-  "private": true,
   "engines": {
     "node": ">=22.0.0"
+  },
+  "homepage": "https://github.com/ashergarland/agent-tool-platform/tree/main/packages/testkit#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ashergarland/agent-tool-platform.git",
+    "directory": "packages/testkit"
+  },
+  "bugs": {
+    "url": "https://github.com/ashergarland/agent-tool-platform/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "agent-tools",
+    "tool-server",
+    "conformance",
+    "testing"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -63,7 +83,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

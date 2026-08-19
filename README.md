@@ -8,8 +8,10 @@ no ASTs, no repositories, no Azure resources, no documents, no images. It is the
 lifecycle, safety primitives, and routing grammar are implemented once and behave identically
 everywhere.
 
-> **Status: v0 foundation.** Nothing here has been published to npm and no infrastructure has been
-> deployed. AST Summarizer is the planned first real consumer, in the next phase.
+> **Status: v0 foundation.** The runtime and testkit are prepared for public npm distribution at
+> 0.1.0, but **nothing has been published yet** and no infrastructure has been deployed. The first
+> publish is a deliberate manual step by a maintainer; see [`docs/releasing.md`](docs/releasing.md).
+> AST Summarizer is the planned first real consumer, in the next phase.
 
 ---
 
@@ -92,6 +94,35 @@ modules inside `runtime`, not separate packages: splitting them would buy versio
 else.
 
 `testkit` may depend on `runtime`. `runtime` must never depend on `testkit`.
+
+### Installation
+
+Both packages are public and scoped to `@agent-tool-platform` on the primary npm registry.
+
+```bash
+# production capability dependency
+npm install @agent-tool-platform/runtime
+
+# capability development and tests
+npm install --save-dev @agent-tool-platform/testkit
+```
+
+> These commands work **after** the packages have been published. Neither has been published yet, so
+> today they will fail with a 404. The first 0.1.0 publish is a manual maintainer step documented in
+> [`docs/releasing.md`](docs/releasing.md).
+
+For v0 the two packages are released in lockstep, so when both are used they must be the same
+version — the testkit depends on exactly `@agent-tool-platform/runtime@<its own version>`:
+
+| Version | `@agent-tool-platform/runtime` | `@agent-tool-platform/testkit` |
+| ------- | ------------------------------ | ------------------------------ |
+| 0.1.0   | 0.1.0                          | 0.1.0                          |
+
+Installing a mismatched pair (for example testkit 0.1.0 with runtime 0.2.0) is unsupported: npm will
+install a second copy of the runtime for the testkit, and the two will not share types or instances.
+
+`examples/minimal-capability` and this repository's root package stay private and are never
+published.
 
 ---
 
@@ -534,11 +565,31 @@ npm run typecheck
 npm run test:coverage
 npm run build
 npm run package:smoke
+npm run release:check
 npm run openapi:emit
 npm run metadata:validate
 ```
 
 Coverage floor: 80% lines, 80% functions, 80% statements, 70% branches.
+
+`package:smoke` packs both publishable packages, installs the tarballs into throwaway projects
+outside this repository, and imports every documented entry point there, so workspace resolution
+cannot mask a broken package. `release:check` asserts the runtime and testkit versions match, that
+the testkit's runtime dependency is exactly that version, and that both manifests describe a public
+npm package in this repository. Neither touches the network or publishes anything.
+
+---
+
+## Releasing
+
+Publication is manual and deliberate. [`.github/workflows/publish.yml`](.github/workflows/publish.yml)
+is `workflow_dispatch` only — it never runs on a push, a pull request, or a tag — and it is the only
+file in the repository containing a publish command. It is intended to become the npm Trusted
+Publisher for both packages, which is a manual configuration step on npmjs.com that has not been
+done yet.
+
+See [`docs/releasing.md`](docs/releasing.md) for the one-time 0.1.0 bootstrap and the Trusted
+Publishing setup.
 
 ---
 
@@ -551,7 +602,9 @@ This repository deliberately does **not**:
 - create `agent-developer-optimization` or any agent repository,
 - create agent manifest or lockfile tooling,
 - implement a telemetry backend, Application Insights, or Log Analytics provisioning,
-- publish packages to npm,
+- publish the packages to npm — 0.1.0 is prepared for publication and the first publish is a
+  separate, manual maintainer action,
+- configure npm Trusted Publishers, which is an npm-side step the workflow cannot perform,
 - deploy infrastructure,
 - implement the Vision TypeScript wrapper,
 - choose a cross-repository Bicep distribution mechanism,

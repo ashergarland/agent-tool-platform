@@ -4,9 +4,30 @@
   "description": "Shared runtime for hosted agent tool servers: capability definition, tool registry, MCP/HTTP/OpenAPI transports, auth, lifecycle, and safety primitives.",
   "license": "MIT",
   "type": "module",
-  "private": true,
   "engines": {
     "node": ">=22.0.0"
+  },
+  "homepage": "https://github.com/ashergarland/agent-tool-platform/tree/main/packages/runtime#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ashergarland/agent-tool-platform.git",
+    "directory": "packages/runtime"
+  },
+  "bugs": {
+    "url": "https://github.com/ashergarland/agent-tool-platform/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "agent-tools",
+    "tool-server",
+    "openapi",
+    "fastify",
+    "runtime"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -99,7 +120,8 @@
   "files": [
     "dist",
     "bin",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

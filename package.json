@@ -25,7 +25,8 @@
     "test:coverage": "vitest run --coverage",
     "openapi:emit": "tsx scripts/emit-openapi.ts openapi.fixture.json",
     "metadata:validate": "tsx scripts/validate-metadata.ts",
-    "package:smoke": "node scripts/package-smoke.mjs"
+    "package:smoke": "node scripts/package-smoke.mjs",
+    "release:check": "node scripts/release-check.mjs"
   },
   "repository": {
     "type": "git",
@@ -33,10 +34,12 @@
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
+    "@types/js-yaml": "4.0.9",
     "@types/node": "22.20.1",
     "@vitest/coverage-v8": "4.1.10",
     "eslint": "9.39.5",
     "eslint-config-prettier": "10.1.8",
+    "js-yaml": "4.3.1",
     "prettier": "3.9.6",
     "tsx": "4.23.11",
     "typescript": "5.9.3",

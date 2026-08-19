@@ -1,0 +1,227 @@
+name: Publish
+
+# Publication is deliberately manual. Nothing here runs on push, pull request, or tag: a release is
+# a decision, not a side effect of merging. This file is also the workflow filename configured as
+# the npm Trusted Publisher for both packages, so renaming it breaks publishing until the npm-side
+# configuration is updated to match.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version expected to be published (must match the manifests exactly)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Run the full validation and a publish dry run without publishing'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Validate and publish
+    # GitHub-hosted runners only: npm trusted publishing does not accept self-hosted runners.
+    runs-on: ubuntu-latest
+    permissions:
+      # Trusted publishing needs exactly these: read the repository, mint an OIDC token. No npm
+      # token is used, referenced, or stored anywhere in this workflow.
+      contents: read
+      id-token: write
+    steps:
+      - name: Refuse to publish from a non-default branch
+        env:
+          SELECTED_REF: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "$SELECTED_REF" != "$DEFAULT_BRANCH" ]; then
+            echo "::error::Releases are cut from $DEFAULT_BRANCH only; this run selected $SELECTED_REF."
+            echo "Publishing from a branch would ship code that never passed the default branch's checks."
+            exit 1
+          fi
+          echo "Publishing from $SELECTED_REF."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Node 22 is the runtime floor these packages declare, and it ships an npm new enough to
+          # be upgraded in place. registry-url points npm at the primary registry; no auth token is
+          # provided, because the OIDC exchange supplies short-lived credentials at publish time.
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - name: Install a pinned npm that supports trusted publishing
+        env:
+          # Pinned deliberately. `npm@latest` would make every release depend on whatever npm
+          # published that morning, including a major version bump, which is the opposite of what a
+          # release job should be: `latest` is already npm 12. This pin is bounded to the npm 11
+          # line and is raised in a commit, reviewed like any other change, never silently.
+          NPM_VERSION: '11.19.0'
+          # OIDC trusted publishing was added in npm 11.5.1. The pin above is well past it, but the
+          # floor is still asserted below so that lowering the pin fails loudly rather than
+          # producing an ENEEDAUTH at the publish step.
+          NPM_TRUSTED_PUBLISHING_MINIMUM: '11.5.1'
+        run: |
+          set -euo pipefail
+          npm install -g "npm@${NPM_VERSION}"
+          installed="$(npm --version)"
+          if [ "$installed" != "$NPM_VERSION" ]; then
+            echo "::error::Expected npm $NPM_VERSION but the runner has $installed."
+            exit 1
+          fi
+          if [ "$(printf '%s\n%s\n' "$NPM_TRUSTED_PUBLISHING_MINIMUM" "$installed" | sort -V | head -n1)" != "$NPM_TRUSTED_PUBLISHING_MINIMUM" ]; then
+            echo "::error::npm $installed cannot perform OIDC trusted publishing; $NPM_TRUSTED_PUBLISHING_MINIMUM or newer is required."
+            exit 1
+          fi
+          echo "npm $installed (trusted publishing requires >= $NPM_TRUSTED_PUBLISHING_MINIMUM)"
+
+      - run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests and conformance suites with coverage
+        run: npm run test:coverage
+
+      - name: Build every package
+        run: npm run build
+
+      - name: Package publication smoke test
+        run: npm run package:smoke
+
+      - name: Release consistency check
+        run: npm run release:check
+
+      - name: Validate repository metadata
+        run: npm run metadata:validate
+
+      - name: Confirm the requested version matches the manifests
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          runtime="$(node -p "require('./packages/runtime/package.json').version")"
+          testkit="$(node -p "require('./packages/testkit/package.json').version")"
+          if [ "$runtime" != "$REQUESTED_VERSION" ] || [ "$testkit" != "$REQUESTED_VERSION" ]; then
+            echo "::error::Requested $REQUESTED_VERSION but the manifests declare runtime $runtime and testkit $testkit."
+            echo "Versions are not bumped by this workflow; commit the intended version first."
+            exit 1
+          fi
+          echo "version=$runtime" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse to republish an existing version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Read-only registry queries. npm versions are immutable: if one already exists the only
+          # correct action is to release a new version, never to overwrite or force.
+          assert_absent() {
+            local name="$1" output status
+            set +e
+            output="$(npm view "$name@$VERSION" version --json 2>&1)"
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ] && [ -n "$output" ] && [ "$output" != "[]" ]; then
+              echo "::error::$name@$VERSION is already published; npm versions are immutable."
+              exit 1
+            fi
+            if printf '%s' "$output" | grep -q 'E404'; then
+              echo "$name is not on the registry yet."
+              return 0
+            fi
+            if [ "$status" -ne 0 ]; then
+              echo "::error::Could not query the registry for $name@$VERSION: $output"
+              exit 1
+            fi
+            echo "$name@$VERSION is not published yet."
+          }
+          assert_absent "@agent-tool-platform/runtime"
+          assert_absent "@agent-tool-platform/testkit"
+
+      # Runtime first, always. The testkit declares an exact dependency on this runtime version, so
+      # publishing the testkit first would put a package on npm that cannot be installed.
+      - name: Publish the runtime
+        id: publish-runtime
+        if: ${{ !inputs.dry_run }}
+        run: npm publish --workspace @agent-tool-platform/runtime --access public
+
+      - name: Confirm the runtime is resolvable before the testkit is published
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            if npm view "@agent-tool-platform/runtime@$VERSION" version >/dev/null 2>&1; then
+              echo "@agent-tool-platform/runtime@$VERSION is resolvable from the registry."
+              exit 0
+            fi
+            echo "Waiting for the registry to serve @agent-tool-platform/runtime@$VERSION (attempt $attempt)."
+            sleep 10
+          done
+          echo "::error::@agent-tool-platform/runtime@$VERSION did not become resolvable; not publishing the testkit."
+          exit 1
+
+      - name: Publish the testkit
+        id: publish-testkit
+        if: ${{ !inputs.dry_run }}
+        run: npm publish --workspace @agent-tool-platform/testkit --access public
+
+      - name: Dry run both packages
+        if: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          npm publish --workspace @agent-tool-platform/runtime --access public --dry-run
+          npm publish --workspace @agent-tool-platform/testkit --access public --dry-run
+          echo "Dry run only. Nothing was published."
+
+      - name: Report a partial release
+        if: ${{ failure() && steps.publish-runtime.outcome == 'success' && steps.publish-testkit.outcome != 'success' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "::error::PARTIAL RELEASE: @agent-tool-platform/runtime@$VERSION is published but @agent-tool-platform/testkit@$VERSION is not."
+          {
+            echo "## Partial release"
+            echo ""
+            echo "\`@agent-tool-platform/runtime@$VERSION\` was published. \`@agent-tool-platform/testkit@$VERSION\` was not."
+            echo ""
+            echo "Recover by publishing the testkit at **the same version**:"
+            echo ""
+            echo '```bash'
+            echo "npm publish --workspace @agent-tool-platform/testkit --access public"
+            echo '```'
+            echo ""
+            echo "Do not bump the testkit independently: for v0 the two packages are versioned in"
+            echo "lockstep and the testkit depends on \`@agent-tool-platform/runtime@$VERSION\` exactly."
+            echo "Do not attempt to overwrite or unpublish the runtime; npm versions are immutable."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarise the release
+        if: ${{ success() && !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          {
+            echo "## Published"
+            echo ""
+            echo "- \`@agent-tool-platform/runtime@$VERSION\`"
+            echo "- \`@agent-tool-platform/testkit@$VERSION\`"
+          } >> "$GITHUB_STEP_SUMMARY"
