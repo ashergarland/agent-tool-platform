@@ -183,10 +183,10 @@ describe('release workflow', () => {
 
   it('uses the Trusted Publishing toolchain without package-manager caching', () => {
     expect(steps.find((step) => step.uses?.startsWith('actions/checkout'))?.uses).toBe(
-      'actions/checkout@v6',
+      'actions/checkout@v7',
     );
     const setupNode = steps.find((step) => step.uses?.startsWith('actions/setup-node'));
-    expect(setupNode?.uses).toBe('actions/setup-node@v6');
+    expect(setupNode?.uses).toBe('actions/setup-node@v7');
     expect(setupNode?.with?.['node-version']).toBe(24);
     expect(setupNode?.with?.['registry-url']).toBe('https://registry.npmjs.org');
     expect(setupNode?.with?.['package-manager-cache']).toBe(false);
