@@ -32,7 +32,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "agent-tool-validate-metadata": "./bin/validate-metadata.js"
+    "agent-tool-validate-metadata": "bin/validate-metadata.js"
   },
   "exports": {
     ".": {
