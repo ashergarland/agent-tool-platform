@@ -30,8 +30,9 @@ import { extractTarball, npmCommand, packPackage } from './lib/tarball.mjs';
  * Testkit is installed against the **packed** runtime, never the workspace one, because that is the
  * relationship npm creates for a real consumer.
  *
- * No network access is required: tarballs are packed locally and third-party dependencies are
- * linked from the already-installed workspace tree.
+ * Import and type checks stay offline by linking third-party dependencies from the workspace. The
+ * executable check performs a real npm install so clean consumers also prove dependency resolution
+ * and npm's generated command wiring.
  */
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
@@ -342,7 +343,6 @@ const exerciseRuntimeBinary = (artefact) => {
         '--no-fund',
         '--no-package-lock',
         '--no-save',
-        '--offline',
         artefact.tarball,
       ],
       { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
