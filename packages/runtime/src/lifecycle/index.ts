@@ -1,5 +1,11 @@
 export { ApplicationLifecycle, type ApplicationState } from './state.js';
 export {
+  defaultShutdownSignals,
+  installShutdownSignalHandlers,
+  type InstallShutdownSignalOptions,
+  type ShutdownSignalTarget,
+} from './signals.js';
+export {
   ReadinessAggregator,
   readinessDegraded,
   readinessNotReady,

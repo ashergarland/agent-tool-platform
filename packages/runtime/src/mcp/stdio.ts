@@ -1,5 +1,6 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import type { Readable, Writable } from 'node:stream';
 import { anonymousPrincipal } from '../auth/types.js';
 import { createMcpServer } from './server.js';
 import type { CreateMcpServerOptions } from './server.js';
@@ -32,8 +33,21 @@ export const createStdioMcpServer = <TServices>(options: StdioMcpOptions<TServic
       })),
   });
 
-export const connectStdio = async (server: Server): Promise<StdioServerTransport> => {
-  const transport = new StdioServerTransport();
+export interface ConnectStdioOptions {
+  /**
+   * The streams the transport reads and writes. Both default to the process's own stdio; naming
+   * them explicitly is what lets a test, or an embedder holding an inherited pipe pair, speak the
+   * real protocol without commandeering the process descriptors.
+   */
+  readonly stdin?: Readable;
+  readonly stdout?: Writable;
+}
+
+export const connectStdio = async (
+  server: Server,
+  options: ConnectStdioOptions = {},
+): Promise<StdioServerTransport> => {
+  const transport = new StdioServerTransport(options.stdin, options.stdout);
   await server.connect(transport);
   return transport;
 };

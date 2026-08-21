@@ -6,6 +6,11 @@ export {
   type CreateApplicationOptions,
   type StartApplicationOptions,
 } from './application.js';
+export {
+  startStdioAgentToolApplication,
+  type StartStdioApplicationOptions,
+  type StdioApplication,
+} from './stdio.js';
 export { ToolInvoker, type InvokeToolOptions, type ToolInvokerDeps } from './invoker.js';
 export type {
   AgentToolCapability,

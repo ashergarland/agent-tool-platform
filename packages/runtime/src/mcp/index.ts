@@ -4,4 +4,9 @@ export {
   type McpInvocationIdentity,
 } from './server.js';
 export { handleMcpHttpRequest } from './http.js';
-export { connectStdio, createStdioMcpServer, type StdioMcpOptions } from './stdio.js';
+export {
+  connectStdio,
+  createStdioMcpServer,
+  type ConnectStdioOptions,
+  type StdioMcpOptions,
+} from './stdio.js';
