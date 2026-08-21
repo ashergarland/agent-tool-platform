@@ -23,8 +23,7 @@ const paths = {
   testkit: 'packages/testkit/package.json',
   fixture: 'examples/minimal-capability/package.json',
 };
-const read = (relativePath) =>
-  JSON.parse(readFileSync(join(repositoryRoot, relativePath), 'utf8'));
+const read = (relativePath) => JSON.parse(readFileSync(join(repositoryRoot, relativePath), 'utf8'));
 const manifests = Object.fromEntries(
   Object.entries(paths).map(([label, path]) => [label, read(path)]),
 );

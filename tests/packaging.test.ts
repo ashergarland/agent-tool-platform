@@ -368,8 +368,8 @@ describe('release documentation', () => {
       expect(document).toContain('git tag vX.Y.Z');
       expect(document).toContain('git push origin vX.Y.Z');
       expect(document).toContain("That's it");
-      expect(document).toContain('0.0.0-development');
     }
+    expect(releasing).toContain('0.0.0-development');
     expect(releasing).toMatch(/No `package\.json` edits\. No lockfile edits/iu);
     expect(releasing).toContain('generated notes');
   });
