@@ -154,6 +154,10 @@ interface Workflow {
   readonly jobs: Record<string, WorkflowJob>;
 }
 
+interface WorkflowDispatchTrigger {
+  readonly inputs?: Record<string, { readonly default?: boolean }>;
+}
+
 const workflowSource = read('.github/workflows/publish.yml');
 // js-yaml parsing is the syntax check: an invalid workflow throws here.
 const workflow = load(workflowSource) as Workflow;
@@ -324,7 +328,7 @@ describe('release workflow', () => {
   });
 
   it('limits manual dispatch to dry runs or explicit testkit recovery', () => {
-    const dispatch = (workflow.on?.workflow_dispatch as { inputs?: Record<string, any> })?.inputs;
+    const dispatch = (workflow.on?.workflow_dispatch as WorkflowDispatchTrigger)?.inputs;
     expect(dispatch?.dry_run?.default).toBe(true);
     expect(dispatch?.recover_testkit_only?.default).toBe(false);
     const guard = steps.find((step) => step.id === 'version');

@@ -10,8 +10,14 @@ const developmentVersion = '0.0.0-development';
 const runtimeName = '@agent-tool-platform/runtime';
 const temporaryRoots: string[] = [];
 
-const readJson = (root: string, path: string): Record<string, any> =>
-  JSON.parse(readFileSync(join(root, path), 'utf8')) as Record<string, any>;
+interface VersionMetadata {
+  readonly version: string;
+  readonly dependencies?: Record<string, string>;
+  readonly packages?: Record<string, VersionMetadata>;
+}
+
+const readJson = (root: string, path: string): VersionMetadata =>
+  JSON.parse(readFileSync(join(root, path), 'utf8')) as VersionMetadata;
 
 const releaseFiles = [
   'package.json',
@@ -49,13 +55,15 @@ describe('release version stamping', () => {
     for (const manifest of [root, runtime, testkit, fixture]) {
       expect(manifest.version).toBe(developmentVersion);
     }
-    expect(testkit.dependencies[runtimeName]).toBe(developmentVersion);
-    expect(fixture.dependencies[runtimeName]).toBe(developmentVersion);
+    expect(testkit.dependencies?.[runtimeName]).toBe(developmentVersion);
+    expect(fixture.dependencies?.[runtimeName]).toBe(developmentVersion);
     expect(lock.version).toBe(developmentVersion);
-    expect(lock.packages[''].version).toBe(developmentVersion);
-    expect(lock.packages['packages/runtime'].version).toBe(developmentVersion);
-    expect(lock.packages['packages/testkit'].version).toBe(developmentVersion);
-    expect(lock.packages['packages/testkit'].dependencies[runtimeName]).toBe(developmentVersion);
+    expect(lock.packages?.['']?.version).toBe(developmentVersion);
+    expect(lock.packages?.['packages/runtime']?.version).toBe(developmentVersion);
+    expect(lock.packages?.['packages/testkit']?.version).toBe(developmentVersion);
+    expect(lock.packages?.['packages/testkit']?.dependencies?.[runtimeName]).toBe(
+      developmentVersion,
+    );
   });
 
   it('accepts the checked-in development state without a release bump', () => {
@@ -85,9 +93,9 @@ describe('release version stamping', () => {
     expect(repository.version).toBe('1.2.3');
     expect(runtime.version).toBe('1.2.3');
     expect(testkit.version).toBe('1.2.3');
-    expect(testkit.dependencies[runtimeName]).toBe('1.2.3');
+    expect(testkit.dependencies?.[runtimeName]).toBe('1.2.3');
     expect(fixture.version).toBe('1.2.3');
-    expect(fixture.dependencies[runtimeName]).toBe('1.2.3');
+    expect(fixture.dependencies?.[runtimeName]).toBe('1.2.3');
     expect(readFileSync(join(root, 'package-lock.json'))).toEqual(lockBefore);
 
     const checkOutput = execFileSync(
