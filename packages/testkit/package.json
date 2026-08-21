@@ -1,6 +1,6 @@
 {
   "name": "@agent-tool-platform/testkit",
-  "version": "0.1.0",
+  "version": "0.0.0-development",
   "description": "Reusable conformance helpers that prove a capability satisfies the agent tool platform contracts.",
   "license": "MIT",
   "type": "module",
@@ -91,7 +91,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "dependencies": {
-    "@agent-tool-platform/runtime": "0.1.0",
+    "@agent-tool-platform/runtime": "0.0.0-development",
     "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "4.4.3"
   },

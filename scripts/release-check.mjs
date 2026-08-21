@@ -20,12 +20,24 @@ const gitUrl = `git+${repositoryUrl}.git`;
 const npmRegistry = 'https://registry.npmjs.org';
 const runtimeName = '@agent-tool-platform/runtime';
 const testkitName = '@agent-tool-platform/testkit';
+const developmentVersion = '0.0.0-development';
 
 /** Dependency protocols npm cannot resolve for an external consumer. */
 const unpublishableProtocols =
   /^(workspace:|file:|link:|portal:|git\+|git:|github:|https?:|[^@\s/]+\/[^@\s/]+$)/u;
 
-const semanticVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+const semanticVersion =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u;
+
+const expectedVersion = process.argv[2];
+if (process.argv.length > 3 || (expectedVersion && !semanticVersion.test(expectedVersion))) {
+  process.stderr.write('Usage: node scripts/release-check.mjs [expected-release-version]\n');
+  process.exit(1);
+}
+if (expectedVersion === developmentVersion) {
+  process.stderr.write(`${developmentVersion} cannot be used as a release version.\n`);
+  process.exit(1);
+}
 
 const failures = [];
 const fail = (message) => failures.push(message);
@@ -33,6 +45,7 @@ const fail = (message) => failures.push(message);
 const read = (relativePath) => JSON.parse(readFileSync(join(repositoryRoot, relativePath), 'utf8'));
 
 const root = read('package.json');
+const fixture = read('examples/minimal-capability/package.json');
 const publishable = [
   { name: runtimeName, directory: 'packages/runtime' },
   { name: testkitName, directory: 'packages/testkit' },
@@ -85,6 +98,18 @@ for (const { name, directory } of publishable) {
 
 const runtime = manifests.get(runtimeName);
 const testkit = manifests.get(testkitName);
+const requiredVersion = expectedVersion ?? developmentVersion;
+
+for (const [label, manifest] of [
+  ['package.json', root],
+  ['packages/runtime/package.json', runtime],
+  ['packages/testkit/package.json', testkit],
+  ['examples/minimal-capability/package.json', fixture],
+]) {
+  if (manifest.version !== requiredVersion) {
+    fail(`${label}: version ${manifest.version} must be ${requiredVersion}`);
+  }
+}
 
 // v0 ships the pair together: one version, one compatibility story.
 if (runtime.version !== testkit.version) {
@@ -105,13 +130,24 @@ if (declaredRuntime !== runtime.version) {
   );
 }
 
+if (fixture.dependencies?.[runtimeName] !== runtime.version) {
+  fail(
+    `examples/minimal-capability/package.json depends on ${runtimeName}@${
+      fixture.dependencies?.[runtimeName] ?? '(missing)'
+    } but the workspace runtime is ${runtime.version}`,
+  );
+}
+
 if (runtime.dependencies?.[testkitName] || runtime.devDependencies?.[testkitName]) {
   fail(`${runtimeName} must never depend on ${testkitName}`);
 }
 
 // The repository itself and its fixtures stay unpublishable.
-for (const path of ['package.json', 'examples/minimal-capability/package.json']) {
-  if (read(path).private !== true) fail(`${path}: must remain private; it is not a product`);
+for (const [path, manifest] of [
+  ['package.json', root],
+  ['examples/minimal-capability/package.json', fixture],
+]) {
+  if (manifest.private !== true) fail(`${path}: must remain private; it is not a product`);
 }
 
 if (failures.length > 0) {
@@ -119,7 +155,7 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `Release check passed for ${runtime.version}:\n` +
+    `${expectedVersion ? 'Release' : 'Development'} check passed for ${runtime.version}:\n` +
       `- ${runtimeName}@${runtime.version} -> public on ${npmRegistry}\n` +
       `- ${testkitName}@${testkit.version} -> public on ${npmRegistry}, depending on ${runtimeName}@${declaredRuntime}\n` +
       'Publication order is runtime first, then testkit. This check publishes nothing.\n',

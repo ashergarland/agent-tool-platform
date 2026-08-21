@@ -1,6 +1,6 @@
 {
   "name": "@agent-tool-platform/runtime",
-  "version": "0.1.0",
+  "version": "0.0.0-development",
   "description": "Shared runtime for hosted agent tool servers: capability definition, tool registry, MCP/HTTP/OpenAPI transports, auth, lifecycle, and safety primitives.",
   "license": "MIT",
   "type": "module",

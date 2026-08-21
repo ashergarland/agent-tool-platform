@@ -64,12 +64,14 @@ through `additionalEnv` or `secretRefs` from the capability's own composition.
 
 `@agent-tool-platform/runtime` and `@agent-tool-platform/testkit` are publishable public packages;
 the repository root and `examples/minimal-capability` are `private: true` and the metadata check
-fails if that changes. Neither package has been published yet.
+fails if that changes.
 
-For v0 the two packages are versioned in lockstep and the testkit depends on the runtime at exactly
-that version. Change both `version` fields and the testkit's runtime dependency in the same commit;
-`npm run release:check` fails if the three values disagree.
+For v0 the two packages are released in lockstep and the testkit depends on the runtime at exactly
+that version. Checked-in workspace metadata stays at `0.0.0-development`; do not edit package or
+lockfile versions for a release.
 
-Nothing publishes from CI. `.github/workflows/publish.yml` is `workflow_dispatch` only and is the
-only file permitted to contain a publish command. The release process, including the one-time manual
-bootstrap of 0.1.0, is documented in [`docs/releasing.md`](docs/releasing.md).
+Normal releases require only `git tag vX.Y.Z` and `git push origin vX.Y.Z` from a commit in `main`
+history. [`.github/workflows/publish.yml`](.github/workflows/publish.yml) is the only file permitted
+to contain a publish command. It derives the version from the tag, stamps metadata only in the
+runner, and publishes through npm Trusted Publishing. The release process, including the one-time
+manual bootstrap of 0.1.0, is documented in [`docs/releasing.md`](docs/releasing.md).
