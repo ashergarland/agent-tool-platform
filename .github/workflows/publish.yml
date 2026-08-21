@@ -156,6 +156,8 @@ jobs:
         run: npm run typecheck
 
       - name: Unit tests and conformance suites with coverage
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: npm run test:coverage
 
       - name: Build every package

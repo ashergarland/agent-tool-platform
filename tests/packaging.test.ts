@@ -47,6 +47,7 @@ const readManifest = (relativePath: string): PackageManifest =>
 const runtimeName = '@agent-tool-platform/runtime';
 const testkitName = '@agent-tool-platform/testkit';
 const developmentVersion = '0.0.0-development';
+const expectedVersion = process.env.RELEASE_VERSION ?? developmentVersion;
 const gitUrl = 'git+https://github.com/ashergarland/agent-tool-platform.git';
 
 const runtime = readManifest('packages/runtime/package.json');
@@ -64,7 +65,7 @@ describe('publishable package metadata', () => {
     (_label, manifest, name, directory) => {
       expect(manifest.name).toBe(name);
       expect(manifest.private).toBeUndefined();
-      expect(manifest.version).toBe(developmentVersion);
+      expect(manifest.version).toBe(expectedVersion);
       expect(manifest.license).toBe('MIT');
       expect(manifest.publishConfig).toEqual({
         access: 'public',
@@ -122,12 +123,18 @@ describe('publishable package metadata', () => {
   });
 
   it('passes the release consistency check', () => {
+    const releaseVersion = process.env.RELEASE_VERSION;
     const output = execFileSync(
       process.execPath,
-      [join(repositoryRoot, 'scripts', 'release-check.mjs')],
+      [
+        join(repositoryRoot, 'scripts', 'release-check.mjs'),
+        ...(releaseVersion ? [releaseVersion] : []),
+      ],
       { cwd: repositoryRoot, encoding: 'utf8' },
     );
-    expect(output).toContain(`Development check passed for ${runtime.version}`);
+    expect(output).toContain(
+      `${releaseVersion ? 'Release' : 'Development'} check passed for ${runtime.version}`,
+    );
     expect(output).toContain('publishes nothing');
   });
 });

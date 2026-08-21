@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,8 +11,8 @@ const runtimeName = '@agent-tool-platform/runtime';
 const temporaryRoots: string[] = [];
 
 interface VersionMetadata {
-  readonly version: string;
-  readonly dependencies?: Record<string, string>;
+  version: string;
+  dependencies?: Record<string, string>;
   readonly packages?: Record<string, VersionMetadata>;
 }
 
@@ -37,6 +37,19 @@ const createReleaseFixture = (): string => {
     mkdirSync(dirname(target), { recursive: true });
     copyFileSync(join(repositoryRoot, path), target);
   }
+  for (const path of [
+    'package.json',
+    'packages/runtime/package.json',
+    'packages/testkit/package.json',
+    'examples/minimal-capability/package.json',
+  ]) {
+    const manifest = readJson(root, path);
+    manifest.version = developmentVersion;
+    if (manifest.dependencies?.[runtimeName]) {
+      manifest.dependencies[runtimeName] = developmentVersion;
+    }
+    writeFileSync(join(root, path), `${JSON.stringify(manifest, undefined, 2)}\n`);
+  }
   return root;
 };
 
@@ -45,18 +58,19 @@ afterEach(() => {
 });
 
 describe('release version stamping', () => {
-  it('keeps checked-in metadata at one permanent development version', () => {
+  it('uses release metadata only when the release workflow supplies a version', () => {
     const root = readJson(repositoryRoot, 'package.json');
     const runtime = readJson(repositoryRoot, 'packages/runtime/package.json');
     const testkit = readJson(repositoryRoot, 'packages/testkit/package.json');
     const fixture = readJson(repositoryRoot, 'examples/minimal-capability/package.json');
     const lock = readJson(repositoryRoot, 'package-lock.json');
 
+    const expectedVersion = process.env.RELEASE_VERSION ?? developmentVersion;
     for (const manifest of [root, runtime, testkit, fixture]) {
-      expect(manifest.version).toBe(developmentVersion);
+      expect(manifest.version).toBe(expectedVersion);
     }
-    expect(testkit.dependencies?.[runtimeName]).toBe(developmentVersion);
-    expect(fixture.dependencies?.[runtimeName]).toBe(developmentVersion);
+    expect(testkit.dependencies?.[runtimeName]).toBe(expectedVersion);
+    expect(fixture.dependencies?.[runtimeName]).toBe(expectedVersion);
     expect(lock.version).toBe(developmentVersion);
     expect(lock.packages?.['']?.version).toBe(developmentVersion);
     expect(lock.packages?.['packages/runtime']?.version).toBe(developmentVersion);
@@ -66,13 +80,21 @@ describe('release version stamping', () => {
     );
   });
 
-  it('accepts the checked-in development state without a release bump', () => {
+  it('accepts development state normally and stamped state during a release', () => {
+    const releaseVersion = process.env.RELEASE_VERSION;
     const output = execFileSync(
       process.execPath,
-      [join(repositoryRoot, 'scripts', 'release-check.mjs')],
+      [
+        join(repositoryRoot, 'scripts', 'release-check.mjs'),
+        ...(releaseVersion ? [releaseVersion] : []),
+      ],
       { cwd: repositoryRoot, encoding: 'utf8' },
     );
-    expect(output).toContain(`Development check passed for ${developmentVersion}`);
+    expect(output).toContain(
+      releaseVersion
+        ? `Release check passed for ${releaseVersion}`
+        : `Development check passed for ${developmentVersion}`,
+    );
   });
 
   it('stamps an explicit release and passes the release check without changing the lockfile', () => {
