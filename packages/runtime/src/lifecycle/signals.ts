@@ -14,7 +14,7 @@ import type { Logger } from 'pino';
  * against an ordinary emitter instead of signalling the test runner itself.
  */
 export interface ShutdownSignalTarget {
-  once(signal: NodeJS.Signals, listener: () => void): unknown;
+  on(signal: NodeJS.Signals, listener: () => void): unknown;
   removeListener(signal: NodeJS.Signals, listener: () => void): unknown;
 }
 
@@ -38,18 +38,15 @@ export const defaultShutdownSignals: readonly NodeJS.Signals[] = ['SIGINT', 'SIG
  * Installs handlers that shut the application down once and exit with a truthful code.
  *
  * A clean shutdown exits `0`; a failed or timed-out one exits non-zero, because an orchestrator
- * restarting the replica needs to tell the two apart. Only the first signal starts teardown: a
- * second one — `SIGTERM` following `SIGINT`, or an impatient operator — is ignored rather than
- * starting a parallel exit path while the first is still unwinding.
+ * restarting the replica needs to tell the two apart. Only the first signal starts teardown; every
+ * later one — a `SIGTERM` chasing a `SIGINT`, or an impatient operator repeating either — is
+ * swallowed rather than starting a parallel exit path while the first is still unwinding.
  *
- * The remaining handlers stay attached until teardown settles. Removing them earlier would hand
- * the next signal back to Node's default disposition, which kills the process mid-teardown: the
- * whole point of holding the signal is to keep the exit under the application's control.
- *
- * Each signal is taken with `once`, so *repeating the same signal* does fall through to Node's
- * default disposition and force-quits. That is deliberate, and it is what the HTTP entry point has
- * always done: a second Ctrl-C is how an operator says "stop waiting", and a graceful shutdown
- * nobody can abandon is its own kind of hang.
+ * Swallowing them requires *persistent* listeners that are removed only once teardown has settled.
+ * A one-shot listener detaches the moment it fires, which hands the next signal of that kind back
+ * to Node's default disposition: the process is killed part-way through its own teardown, and the
+ * exit code describes the signal rather than whether the capability actually stopped. Holding the
+ * signal is safe because it is not open-ended — the backstop below always ends the process.
  *
  * Returns a function that removes the handlers, so a caller that shuts down for its own reasons
  * does not leave listeners attached to the process.
@@ -85,6 +82,11 @@ export const installShutdownSignalHandlers = (
     // A hard backstop in case teardown itself hangs. Teardown already bounds its own wait for
     // in-flight work, so reaching this timer means something below that is stuck; the extra second
     // keeps the two budgets from racing each other to the millisecond.
+    //
+    // Deliberately *referenced*, unlike the drain timers it backs up. It is armed only during a
+    // shutdown that is already under way, and it is cleared the moment teardown settles, so the
+    // only thing it keeps alive is a process that would otherwise exit while still tearing down —
+    // reporting success through an empty event loop rather than through a completed teardown.
     const graceMs = Math.max(1, options.graceMs) + 1000;
     const timer = setTimeout(() => {
       options.logger.error(
@@ -93,7 +95,6 @@ export const installShutdownSignalHandlers = (
       );
       finish(1);
     }, graceMs);
-    timer.unref?.();
 
     void options
       .shutdown()
@@ -111,7 +112,7 @@ export const installShutdownSignalHandlers = (
   for (const signal of signals) {
     const listener = (): void => stop(signal);
     installed.set(signal, listener);
-    target.once(signal, listener);
+    target.on(signal, listener);
   }
 
   return uninstall;

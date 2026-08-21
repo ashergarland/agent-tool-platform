@@ -494,9 +494,15 @@ When `startAgentToolApplication` installs signal handlers, a clean shutdown exit
 or timed-out shutdown exits non-zero, so an orchestrator can tell the difference.
 `startStdioAgentToolApplication` uses the same handler — one signal sequence, one set of exit-code
 semantics — and differs only in what teardown means: it drains the application, runs the capability
-`stop` hook, and closes the MCP server last, exactly where HTTP closes its listener. Only the first
-signal starts teardown, and teardown itself is memoised, so a `SIGTERM` chasing a `SIGINT` cannot
-run the capability `stop` hook twice.
+`stop` hook, and closes the MCP server last, exactly where HTTP closes its listener.
+
+Only the first signal starts teardown, and teardown itself is memoised, so a `SIGTERM` chasing a
+`SIGINT` cannot run the capability `stop` hook twice. Later signals are **swallowed** rather than
+ignored: the handlers stay installed until teardown settles, because a detached handler returns the
+next signal to Node's default action, which kills the process part-way through its own teardown and
+reports the signal instead of whether the capability actually stopped. Holding the signal is not
+open-ended — the backstop timer always ends the process, and it is deliberately referenced so a
+stuck teardown cannot exit `0` through an emptied event loop.
 
 ---
 

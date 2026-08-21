@@ -1,5 +1,7 @@
+import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { PassThrough, type Readable } from 'node:stream';
+import { PassThrough, type Readable, type Writable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
@@ -46,8 +48,8 @@ class StdioProtocolClient {
   public readonly lines: string[] = [];
 
   public constructor(
-    private readonly toServer: PassThrough,
-    fromServer: PassThrough,
+    private readonly toServer: Writable,
+    fromServer: Readable,
   ) {
     fromServer.on('data', (chunk: Buffer) => {
       this.buffer += chunk.toString('utf8');
@@ -336,7 +338,10 @@ describe('startStdioAgentToolApplication', () => {
 });
 
 describe('stdio shutdown', () => {
-  const probeCapability = (counts: { starts: number; stops: number }) =>
+  const probeCapability = (
+    counts: { starts: number; stops: number },
+    overrides: { start?: () => void } = {},
+  ) =>
     defineAgentToolCapability<Record<string, never>>({
       manifest: {
         name: 'stdio-probe',
@@ -368,9 +373,11 @@ describe('stdio shutdown', () => {
         return {};
       },
       lifecycle: {
-        start() {
-          counts.starts += 1;
-        },
+        start:
+          overrides.start ??
+          ((): void => {
+            counts.starts += 1;
+          }),
         stop() {
           counts.stops += 1;
         },
@@ -467,7 +474,7 @@ describe('stdio shutdown', () => {
       expect(exit).toHaveBeenCalledWith(0);
       expect(counts.stops).toBe(1);
       expect(stdio.application.lifecycle.state).toBe('stopped');
-      // The handler removed itself and its sibling, so a following SIGTERM starts nothing.
+      // Both handlers are released only after teardown settled, so nothing is left attached.
       expect(signalListeners('SIGINT')).toHaveLength(beforeInt.length);
       expect(signalListeners('SIGTERM')).toHaveLength(beforeTerm.length);
     } finally {
@@ -494,6 +501,30 @@ describe('stdio shutdown', () => {
     expect(counts.stops).toBe(1);
     // A startup that never completed must not have left signal handlers attached either.
     expect(signalListeners('SIGINT')).toHaveLength(beforeInt.length);
+  }, 30_000);
+
+  it('rolls back and reports the original error when the capability start hook throws', async () => {
+    const counts = { starts: 0, stops: 0 };
+    const failing = probeCapability(counts, {
+      start() {
+        counts.starts += 1;
+        throw new Error('domain resources could not be opened');
+      },
+    });
+    const pipes = createPipes();
+
+    // The failure the caller sees is the capability's own, not whatever the rollback then hit.
+    await expect(
+      startStdioAgentToolApplication<Record<string, never>>(failing, {
+        env: { NODE_ENV: 'test' },
+        stdin: pipes.stdin,
+        stdout: pipes.stdout,
+      }),
+    ).rejects.toThrow(/domain resources could not be opened/u);
+
+    // Services were already constructed, so teardown has to run even though `start` never finished.
+    expect(counts.stops).toBe(1);
+    expect(pipes.stdout.readableLength).toBe(0);
   }, 30_000);
 
   it('installs no signal handlers when the caller declines them', async () => {
@@ -544,14 +575,15 @@ describe('installShutdownSignalHandlers', () => {
     target.emit('SIGINT');
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    // Teardown is in flight. The other signal's handler must still be attached: releasing it here
-    // would hand the next signal to Node's default disposition, which kills the process
-    // mid-teardown. The fired signal's own handler is released by `once`, which is the deliberate
-    // force-quit escape hatch a repeated Ctrl-C relies on.
+    // Teardown is in flight, so every handler must still be attached — including the one for the
+    // signal that started it. Detaching either would hand the next signal to Node's default
+    // disposition, which kills the process part-way through its own teardown.
+    expect(target.listenerCount('SIGINT')).toBe(1);
     expect(target.listenerCount('SIGTERM')).toBe(1);
-    expect(target.listenerCount('SIGINT')).toBe(0);
 
+    target.emit('SIGINT');
     target.emit('SIGTERM');
+    target.emit('SIGINT');
     expect(teardowns).toBe(1);
     expect(exits).toEqual([]);
 
@@ -560,6 +592,7 @@ describe('installShutdownSignalHandlers', () => {
 
     expect(teardowns).toBe(1);
     expect(exits).toEqual([0]);
+    expect(target.listenerCount('SIGINT')).toBe(0);
     expect(target.listenerCount('SIGTERM')).toBe(0);
   }, 30_000);
 
@@ -625,6 +658,83 @@ describe('installShutdownSignalHandlers', () => {
     expect(target.listenerCount('SIGINT')).toBe(0);
     expect(target.listenerCount('SIGTERM')).toBe(0);
   });
+});
+
+describe('a real stdio process', () => {
+  const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
+  const tsxCli = fileURLToPath(new URL('../node_modules/tsx/dist/cli.mjs', import.meta.url));
+  const childEntry = fileURLToPath(new URL('./fixtures/stdio-child.ts', import.meta.url));
+
+  /**
+   * The assertion the in-process tests structurally cannot make.
+   *
+   * Injected streams prove the transport wiring, but a stray `console.log`, a logger aimed at the
+   * wrong destination, or a chatty dependency writes to the real file descriptor and never touches
+   * those pipes. Spawning the entry point and capturing fd 1 byte for byte is the only way to hold
+   * the process — not just the transport — to "stdout carries protocol traffic and nothing else".
+   */
+  it('keeps file descriptor 1 protocol-only from startup through shutdown', async () => {
+    const child = spawn(process.execPath, [tsxCli, childEntry], {
+      cwd: repositoryRoot,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, NODE_ENV: 'test' },
+    });
+
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    child.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+    child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+
+    const exited = new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', (code) => resolve(code));
+    });
+
+    try {
+      const client = new StdioProtocolClient(child.stdin, child.stdout);
+
+      const initialized = await client.initialize();
+      expect(initialized.serverInfo).toMatchObject({ name: 'stdio-child-probe' });
+
+      const listed = (await client.request('tools/list')) as { tools: { name: string }[] };
+      expect(listed.tools.map((tool) => tool.name).sort()).toEqual(['echo', 'stop_server']);
+
+      const echoed = (await client.request('tools/call', {
+        name: 'echo',
+        arguments: { value: 'round trip' },
+      })) as { structuredContent?: { value?: string } };
+      expect(echoed.structuredContent).toMatchObject({ value: 'round trip' });
+
+      // Graceful teardown, requested in band because Windows cannot deliver a SIGTERM a Node
+      // process can observe. The signal path itself is covered by the in-process tests.
+      const stopping = (await client.request('tools/call', {
+        name: 'stop_server',
+        arguments: {},
+      })) as { structuredContent?: { stopping?: boolean } };
+      expect(stopping.structuredContent).toMatchObject({ stopping: true });
+
+      const code = await Promise.race([
+        exited,
+        new Promise<number | null>((_, reject) =>
+          setTimeout(() => reject(new Error('the child did not exit after shutting down')), 20_000),
+        ),
+      ]);
+      // A clean teardown drains the loop and leaves nothing behind to hold the process open.
+      expect(code).toBe(0);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+    }
+
+    // Everything fd 1 emitted, reassembled and held to the protocol: no banner, no log line, no
+    // partial frame, and nothing between the frames.
+    const stdout = Buffer.concat(stdoutChunks).toString('utf8');
+    expect(stdout.length).toBeGreaterThan(0);
+    expect(stdout.endsWith('\n')).toBe(true);
+    for (const line of stdout.split('\n').slice(0, -1)) {
+      expect(() => JSON.parse(line) as unknown).not.toThrow();
+      expect(JSON.parse(line) as unknown).toMatchObject({ jsonrpc: '2.0' });
+    }
+  }, 60_000);
 });
 
 describe('HTTP startup after sharing the signal path', () => {

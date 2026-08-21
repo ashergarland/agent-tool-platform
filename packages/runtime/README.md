@@ -52,7 +52,10 @@ await startStdioAgentToolApplication(capability, {
 ```
 
 It resolves to `{ application, server, transport, close }`. `close()` drains the application, runs
-the capability `stop` hook, and closes the MCP server, once however often it is called.
+the capability `stop` hook, and closes the MCP server, once however often it is called. Signal
+handlers are released only after all of that has settled, so a signal arriving during a long drain
+cannot cut teardown short. A startup that fails after the capability has begun starting rolls the
+application and any half-connected server back before rethrowing the original error.
 
 Because stdio is a local pipe with no network peer, the helper applies local execution semantics
 over the environment it is given — authentication disabled, non-production `NODE_ENV` (a `test`

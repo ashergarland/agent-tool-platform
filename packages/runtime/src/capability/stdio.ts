@@ -107,28 +107,37 @@ export const startStdioAgentToolApplication = async <
     env: localStdioEnvironment(applicationOptions.env ?? process.env),
   });
 
-  await application.start();
-
-  let server: Server | undefined;
-  let transport: StdioServerTransport;
-  try {
-    server = application.createStdioServer();
-    transport = await connectStdio(server, {
-      ...(stdin === undefined ? {} : { stdin }),
-      ...(stdout === undefined ? {} : { stdout }),
-    });
-  } catch (error) {
-    // The capability is running by this point, so a transport that never connected must not leave
-    // a started application behind. The MCP server is closed too, when there is one: `connect`
-    // installs its handlers and adopts the transport *before* starting it, so a failure part-way
-    // leaves a half-wired server that nothing else would ever tear down.
-    //
-    // A failure inside `start()` itself is deliberately left alone, exactly as the HTTP entry point
-    // leaves it: a capability that could not start has not agreed to be stopped.
-    await application.shutdown().catch(() => undefined);
-    await server?.close().catch(() => undefined);
-    throw error;
-  }
+  /**
+   * Staged startup, with rollback.
+   *
+   * Every stage after assembly can leave something running: the capability `start` hook may have
+   * opened domain resources before throwing, and `connect` adopts the transport and installs its
+   * stream handlers *before* starting it, so a half-connected server still holds listeners. Nothing
+   * else will ever tear those down, because a failure here rejects without returning a `close()`.
+   *
+   * Rollback failures are swallowed on purpose: the caller must see why startup failed, not why the
+   * cleanup that followed it also did. `server.close()` closes the transport it adopted.
+   */
+  const started = await (async (): Promise<{
+    server: Server;
+    transport: StdioServerTransport;
+  }> => {
+    let server: Server | undefined;
+    try {
+      await application.start();
+      server = application.createStdioServer();
+      const transport = await connectStdio(server, {
+        ...(stdin === undefined ? {} : { stdin }),
+        ...(stdout === undefined ? {} : { stdout }),
+      });
+      return { server, transport };
+    } catch (error) {
+      await server?.close().catch(() => undefined);
+      await application.shutdown().catch(() => undefined);
+      throw error;
+    }
+  })();
+  const { server, transport } = started;
 
   let uninstallSignals: (() => void) | undefined;
   let closeOnce: Promise<void> | undefined;
@@ -140,20 +149,21 @@ export const startStdioAgentToolApplication = async <
    * drain are refused with `not_ready` by the shared invoker, so keeping the transport open costs
    * nothing. The transport closes last, exactly as the HTTP listener does.
    *
-   * Signal handlers are removed only once all of that has settled. Releasing them earlier would
-   * return the next signal to Node's default disposition, which kills the process part-way through
-   * its own teardown.
+   * Signal handlers are released in the outer `finally`, once every stage has settled — including
+   * when a caller invoked `close()` itself. Releasing them at the top would mean a `SIGTERM`
+   * arriving during a long drain hits Node's default disposition and cuts teardown short, which is
+   * precisely the case the handlers exist to prevent.
    */
   const close = async (): Promise<void> => {
     closeOnce ??= (async (): Promise<void> => {
       try {
-        await application.shutdown();
-      } finally {
         try {
-          await server.close();
+          await application.shutdown();
         } finally {
-          uninstallSignals?.();
+          await server.close();
         }
+      } finally {
+        uninstallSignals?.();
       }
     })();
     await closeOnce;
