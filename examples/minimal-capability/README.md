@@ -21,6 +21,7 @@ platform has to get right:
 | `RouteProbe`                        | Proving the admission guard rejects a request _before_ the handler begins.         |
 | `MINIMAL_*` env schema              | Capability configuration composition and cross-field validation.                   |
 | Telemetry estimator                 | The capability measurement seam merging into baseline invocation telemetry.        |
+| `src/stdio-entry.ts`                | The whole of a local stdio entry point: one call plus this capability's own env.   |
 
 If you are looking for how a real capability is written, read this fixture's source — it is
 deliberately the shortest complete example — and then the repository
