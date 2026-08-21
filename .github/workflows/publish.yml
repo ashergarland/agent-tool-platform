@@ -9,13 +9,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version expected to be published (must match the manifests exactly)'
+        description: 'Exact version to test or recover (without the v prefix)'
         required: true
         type: string
       dry_run:
         description: 'Run validation and npm publish --dry-run without publishing'
         required: false
-        default: false
+        default: true
         type: boolean
       recover_testkit_only:
         description: 'Recover a partial release where runtime exists and testkit does not'
@@ -24,7 +24,7 @@ on:
         type: boolean
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 concurrency:
@@ -37,7 +37,7 @@ jobs:
     # GitHub-hosted runners only: npm trusted publishing does not accept self-hosted runners.
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v7
@@ -55,7 +55,9 @@ jobs:
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           DISPATCH_VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
           EVENT_NAME: ${{ github.event_name }}
+          RECOVER_TESTKIT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.recover_testkit_only || false }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -73,9 +75,10 @@ jobs:
               exit 1
             fi
             source="tag $REF_NAME"
+            release_tag="$REF_NAME"
           elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
-              echo "::error::Manual releases must run from $DEFAULT_BRANCH; selected $REF_NAME."
+              echo "::error::Manual dry runs and recoveries must start from $DEFAULT_BRANCH; selected $REF_NAME."
               exit 1
             fi
             requested="$DISPATCH_VERSION"
@@ -83,24 +86,32 @@ jobs:
               echo "::error::Requested version must be an exact package version; received $requested."
               exit 1
             fi
-            source="workflow_dispatch on $REF_NAME"
+            if [ "$DRY_RUN" != "true" ] && [ "$RECOVER_TESTKIT_ONLY" != "true" ]; then
+              echo "::error::workflow_dispatch may only perform a dry run or explicit testkit-only recovery. Normal releases require a pushed tag."
+              exit 1
+            fi
+            release_tag="v$requested"
+            if [ "$RECOVER_TESTKIT_ONLY" = "true" ]; then
+              git fetch --force --no-tags origin "refs/tags/$release_tag:refs/tags/$release_tag"
+              git fetch --no-tags origin "$DEFAULT_BRANCH"
+              release_commit="$(git rev-parse "${release_tag}^{commit}")"
+              if ! git merge-base --is-ancestor "$release_commit" "origin/$DEFAULT_BRANCH"; then
+                echo "::error::Recovery tag $release_tag does not point to a commit in $DEFAULT_BRANCH history."
+                exit 1
+              fi
+              git checkout --detach "$release_commit"
+              source="recovery for tag $release_tag"
+            else
+              source="dry run on $REF_NAME"
+            fi
           else
             echo "::error::Unsupported release event: $EVENT_NAME."
             exit 1
           fi
 
-          root="$(node -p "require('./package.json').version")"
-          runtime="$(node -p "require('./packages/runtime/package.json').version")"
-          testkit="$(node -p "require('./packages/testkit/package.json').version")"
-          dependency="$(node -p "require('./packages/testkit/package.json').dependencies['@agent-tool-platform/runtime']")"
-          if [ "$root" != "$requested" ] || [ "$runtime" != "$requested" ] || [ "$testkit" != "$requested" ] || [ "$dependency" != "$requested" ]; then
-            echo "::error::Release version $requested does not match every manifest."
-            echo "root=$root runtime=$runtime testkit=$testkit testkit-runtime-dependency=$dependency"
-            exit 1
-          fi
-
           echo "version=$requested" >> "$GITHUB_OUTPUT"
           echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "Validated $source for version $requested."
 
       - name: Install a pinned npm that supports trusted publishing
@@ -130,6 +141,11 @@ jobs:
 
       - run: npm ci
 
+      - name: Stamp the release version
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: node scripts/stamp-release-version.mjs "$RELEASE_VERSION"
+
       - name: Check formatting
         run: npm run format:check
 
@@ -140,6 +156,8 @@ jobs:
         run: npm run typecheck
 
       - name: Unit tests and conformance suites with coverage
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: npm run test:coverage
 
       - name: Build every package
@@ -149,7 +167,9 @@ jobs:
         run: npm run package:smoke
 
       - name: Release consistency check
-        run: npm run release:check
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: npm run release:check -- "$RELEASE_VERSION"
 
       - name: Validate repository metadata
         run: npm run metadata:validate
@@ -265,6 +285,19 @@ jobs:
           echo "::error::testkit@$VERSION and its exact runtime dependency were not publicly resolvable after 3 minutes."
           exit 1
 
+      - name: Create the GitHub Release
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            echo "GitHub Release $RELEASE_TAG already exists; leaving it unchanged."
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes --title "$RELEASE_TAG"
+          fi
+
       - name: Dry run publication
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         env:
@@ -317,4 +350,7 @@ jobs:
             fi
             echo "- Testkit: \`@agent-tool-platform/testkit@$VERSION\`"
             echo "- Authentication: npm Trusted Publishing (OIDC)"
+            if [ "$DRY_RUN" != "true" ]; then
+              echo "- GitHub Release: created or already present with generated notes"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

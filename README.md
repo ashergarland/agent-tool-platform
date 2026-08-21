@@ -578,14 +578,21 @@ npm package in this repository. Neither touches the network or publishes anythin
 
 ## Releasing
 
-Publication is automated and deliberate. A tag named for the manifest version, such as `v0.1.1`,
-starts [`.github/workflows/publish.yml`](.github/workflows/publish.yml), validates the repository,
-and publishes runtime before testkit through npm Trusted Publishing. Ordinary pushes, pull requests,
-and merges do not publish. `workflow_dispatch` remains available for dry runs and deliberate
-recovery.
+Make sure the intended commit is on `main`, then:
+
+```bash
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+That's it. The tag is the release version. The
+[Publish workflow](.github/workflows/publish.yml) validates and stamps the exact tagged commit,
+publishes runtime before testkit through npm Trusted Publishing, verifies both packages from npm,
+and creates the GitHub Release with generated notes. Ordinary pushes, pull requests, and merges do
+not publish. No manifest, lockfile, changelog, release-note, or release commit is needed.
 
 See [`docs/releasing.md`](docs/releasing.md) for the completed one-time 0.1.0 bootstrap and the
-normal tag-driven process.
+secondary dry-run and partial-recovery procedures.
 
 ---
 

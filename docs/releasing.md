@@ -1,5 +1,23 @@
 # Releasing
 
+## Release
+
+Make sure the intended commit is on `main`, then:
+
+```bash
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+That's it.
+
+GitHub Actions derives the package version from the tag, validates the exact tagged commit, stamps
+release metadata in the runner, publishes runtime and testkit, verifies both public packages, and
+creates the GitHub Release with generated notes.
+
+No `package.json` edits. No lockfile edits. No release commit. No manual workflow. No manual npm
+publish. No changelog or release-note file.
+
 Two packages are distributed from this repository:
 
 - `@agent-tool-platform/runtime`
@@ -18,7 +36,7 @@ must not be repeated for later versions.
 
 ---
 
-## A. Completed one-time bootstrap for 0.1.0 (August 2026)
+## Completed one-time bootstrap for 0.1.0 (August 2026)
 
 npm cannot attach a Trusted Publisher to a package that does not exist. So the first release of each
 package had to be published by a maintainer from a local machine before OIDC publishing could be
@@ -113,12 +131,10 @@ invariants. Package manifests remained at 0.1.0 throughout this transition.
 
 ---
 
-## B. Normal releases through Trusted Publishing
+## Trusted Publishing configuration
 
 Once both packages exist on npm, publishing moves into GitHub Actions using OIDC. No long-lived npm
 write token is created, stored in GitHub secrets, or referenced by the workflow.
-
-### Trusted Publisher configuration
 
 This npm-side setup has been completed **once per package**. npm scopes a Trusted Publisher to a
 single package, so both packages have the following configuration:
@@ -140,20 +156,25 @@ The workflow also satisfies npm's runner and repository requirements:
 - publication must run on a GitHub-hosted runner (self-hosted runners are not accepted),
 - each package's `repository.url` must match this GitHub repository, which `release:check` asserts.
 
-### Run a release
+## How the automation works
 
-1. Merge the version change to the default branch. This workflow never bumps a version.
-2. Create and push a tag whose name is `v` followed by that exact version, for example `v0.1.1`.
-3. The Publish workflow verifies that the tagged commit is in the default branch history, validates
-   the tag against every manifest and the testkit's exact runtime dependency, and runs format, lint,
-   typecheck, coverage, build, package smoke, `release:check`, and metadata validation.
-4. After confirming both versions are absent from npm, it publishes runtime, waits with bounded
-   retries until that exact version resolves, publishes testkit, and verifies its version and runtime
-   dependency from the registry.
+Checked-in workspace manifests and lockfile metadata stay permanently at `0.0.0-development`.
+Testkit and the private example depend exactly on the local runtime at that same development
+version, so npm workspaces resolve it locally. A release never changes those checked-in files.
 
-`workflow_dispatch` is available from the default branch for a deliberate dry run or recovery. It
-requires an explicit version that exactly matches all manifests. A dispatch without `dry_run` is a
-real publication operation, not a substitute for the normal tag path.
+On a pushed `v*` tag, the Publish workflow verifies valid semantic version syntax and confirms that
+the tagged commit belongs to `main` history. After `npm ci`, it stamps the root, runtime, testkit,
+private fixture, and exact runtime dependencies to the tag version in the ephemeral runner. The
+lockfile is not changed. The complete format, lint, typecheck, coverage, build, package smoke,
+release check, and metadata suite then runs against that stamped state.
+
+The workflow checks npm before publication. If both package versions are absent, it publishes
+runtime, waits with bounded retries for that exact version to resolve publicly, publishes testkit,
+and verifies testkit's exact runtime dependency from npm. Only then does it create the GitHub
+Release with generated notes.
+
+`workflow_dispatch` is not a normal release path. It requires an explicit version and is limited to
+a non-publishing dry run or deliberate testkit-only recovery.
 
 ### Why no token
 
@@ -178,8 +199,10 @@ long-lived-token path that nobody is using any more.
 The runtime publishes before the testkit, so the failure mode with consequences is: runtime
 published, testkit not. The workflow detects this registry state and refuses to treat it as a normal
 release. Recover through `workflow_dispatch` from the default branch with the same version and the
-explicit testkit-only recovery option. The workflow verifies that runtime exists, testkit does not,
-and the manifests still agree before publishing only the testkit.
+explicit testkit-only recovery option. The workflow checks out the existing version tag, stamps and
+validates that commit, verifies that runtime exists and testkit does not, then publishes only the
+testkit. It verifies the public dependency and creates the GitHub Release if it is missing; an
+existing release is left unchanged.
 
 Do not bump the testkit independently to "get around" the failure: for v0 the versions are locked
 together and the testkit's runtime dependency is exact, so an independent bump produces a pair that
@@ -198,7 +221,7 @@ npm deprecate @agent-tool-platform/runtime@0.1.0 "Broken release; use 0.1.1"
 
 - Runtime and testkit share one version number.
 - The testkit's runtime dependency is exact, never a range.
-- Nothing bumps versions automatically. There is no Changesets, semantic-release, or Lerna
-  publishing here, on purpose: two packages released together do not need a release framework.
-- To cut a new version, change both `version` fields and the testkit's runtime dependency in one
-  commit, then let `release:check` confirm the three values agree.
+- Checked-in manifests and workspace lockfile metadata stay at `0.0.0-development`.
+- The pushed tag is the sole release version. The runner stamps package metadata; it never commits
+  or pushes those generated changes.
+- There is no Changesets, semantic-release, release-please, or Lerna publishing machinery.

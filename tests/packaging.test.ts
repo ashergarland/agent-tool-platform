@@ -46,6 +46,8 @@ const readManifest = (relativePath: string): PackageManifest =>
 
 const runtimeName = '@agent-tool-platform/runtime';
 const testkitName = '@agent-tool-platform/testkit';
+const developmentVersion = '0.0.0-development';
+const expectedVersion = process.env.RELEASE_VERSION ?? developmentVersion;
 const gitUrl = 'git+https://github.com/ashergarland/agent-tool-platform.git';
 
 const runtime = readManifest('packages/runtime/package.json');
@@ -63,7 +65,7 @@ describe('publishable package metadata', () => {
     (_label, manifest, name, directory) => {
       expect(manifest.name).toBe(name);
       expect(manifest.private).toBeUndefined();
-      expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/u);
+      expect(manifest.version).toBe(expectedVersion);
       expect(manifest.license).toBe('MIT');
       expect(manifest.publishConfig).toEqual({
         access: 'public',
@@ -121,12 +123,18 @@ describe('publishable package metadata', () => {
   });
 
   it('passes the release consistency check', () => {
+    const releaseVersion = process.env.RELEASE_VERSION;
     const output = execFileSync(
       process.execPath,
-      [join(repositoryRoot, 'scripts', 'release-check.mjs')],
+      [
+        join(repositoryRoot, 'scripts', 'release-check.mjs'),
+        ...(releaseVersion ? [releaseVersion] : []),
+      ],
       { cwd: repositoryRoot, encoding: 'utf8' },
     );
-    expect(output).toContain(`Release check passed for ${runtime.version}`);
+    expect(output).toContain(
+      `${releaseVersion ? 'Release' : 'Development'} check passed for ${runtime.version}`,
+    );
     expect(output).toContain('publishes nothing');
   });
 });
@@ -153,6 +161,10 @@ interface Workflow {
   readonly jobs: Record<string, WorkflowJob>;
 }
 
+interface WorkflowDispatchTrigger {
+  readonly inputs?: Record<string, { readonly default?: boolean }>;
+}
+
 const workflowSource = read('.github/workflows/publish.yml');
 // js-yaml parsing is the syntax check: an invalid workflow throws here.
 const workflow = load(workflowSource) as Workflow;
@@ -172,9 +184,9 @@ describe('release workflow', () => {
     expect(triggers).toHaveProperty('workflow_dispatch');
   });
 
-  it('requests only the permissions trusted publishing needs', () => {
-    expect(workflow.permissions).toEqual({ contents: 'read', 'id-token': 'write' });
-    expect(publishJob.permissions).toEqual({ contents: 'read', 'id-token': 'write' });
+  it('requests only the permissions trusted publishing and GitHub Releases need', () => {
+    expect(workflow.permissions).toEqual({ contents: 'write', 'id-token': 'write' });
+    expect(publishJob.permissions).toEqual({ contents: 'write', 'id-token': 'write' });
   });
 
   it('runs on a GitHub-hosted runner, which npm requires for OIDC', () => {
@@ -235,14 +247,20 @@ describe('release workflow', () => {
     expect(guard?.run).toContain('Release tags must have the shape v<package-version>');
   });
 
-  it('derives the tag version and matches every manifest value exactly', () => {
+  it('uses the tag as the normal release version and stamps only after npm ci', () => {
     const guard = steps.find((step) => step.id === 'version');
     expect(guard?.run).toContain('requested="${REF_NAME#v}"');
-    expect(guard?.run).toContain("require('./package.json').version");
-    expect(guard?.run).toContain("require('./packages/runtime/package.json').version");
-    expect(guard?.run).toContain("require('./packages/testkit/package.json').version");
-    expect(guard?.run).toContain("dependencies['@agent-tool-platform/runtime']");
-    expect(guard?.run).toContain('"$dependency" != "$requested"');
+    expect(guard?.run).not.toContain("require('./package.json').version");
+
+    const installAt = indexOfStep((step) => (step.run ?? '').includes('npm ci'));
+    const stampAt = indexOfStep((step) =>
+      (step.run ?? '').includes('scripts/stamp-release-version.mjs'),
+    );
+    expect(stampAt).toBeGreaterThan(installAt);
+    expect(steps[stampAt]?.run).toContain('"$RELEASE_VERSION"');
+    expect(
+      indexOfStep((step) => (step.run ?? '').includes('npm run format:check')),
+    ).toBeGreaterThan(stampAt);
   });
 
   it('completes the entire validation suite before anything is published', () => {
@@ -315,6 +333,24 @@ describe('release workflow', () => {
     expect(fallbackReport?.run).toContain('recover_testkit_only');
     expect(fallbackReport?.run).toContain('Do not republish');
   });
+
+  it('limits manual dispatch to dry runs or explicit testkit recovery', () => {
+    const dispatch = (workflow.on?.workflow_dispatch as WorkflowDispatchTrigger)?.inputs;
+    expect(dispatch?.dry_run?.default).toBe(true);
+    expect(dispatch?.recover_testkit_only?.default).toBe(false);
+    const guard = steps.find((step) => step.id === 'version');
+    expect(guard?.run).toContain('workflow_dispatch may only perform a dry run');
+    expect(guard?.run).toContain('git checkout --detach "$release_commit"');
+  });
+
+  it('creates generated-notes GitHub Releases only after public npm verification', () => {
+    const verifyAt = indexOfStep((step) => (step.run ?? '').includes('runtime_dependency'));
+    const releaseAt = indexOfStep((step) => (step.run ?? '').includes('gh release create'));
+    expect(releaseAt).toBeGreaterThan(verifyAt);
+    expect(steps[releaseAt]?.run).toContain('--generate-notes');
+    expect(steps[releaseAt]?.run).toContain('gh release view');
+    expect(steps[releaseAt]?.if).toContain("github.event_name != 'workflow_dispatch'");
+  });
 });
 
 describe('continuous integration', () => {
@@ -337,6 +373,17 @@ describe('continuous integration', () => {
 describe('release documentation', () => {
   const releasing = read('docs/releasing.md');
   const readme = read('README.md');
+
+  it('makes the two-command tag release path authoritative', () => {
+    for (const document of [readme, releasing]) {
+      expect(document).toContain('git tag vX.Y.Z');
+      expect(document).toContain('git push origin vX.Y.Z');
+      expect(document).toContain("That's it");
+    }
+    expect(releasing).toContain('0.0.0-development');
+    expect(releasing).toMatch(/No `package\.json` edits\. No lockfile edits/iu);
+    expect(releasing).toContain('generated notes');
+  });
 
   it('documents the one-time manual bootstrap in the only safe order', () => {
     const runtimeAt = releasing.indexOf(

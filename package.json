@@ -1,6 +1,6 @@
 {
   "name": "agent-tool-platform",
-  "version": "0.1.0",
+  "version": "0.0.0-development",
   "description": "Shared runtime, testkit, and infrastructure primitives for hosted agent tool servers.",
   "license": "MIT",
   "type": "module",
