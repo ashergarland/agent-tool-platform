@@ -9,21 +9,20 @@ Both are public, both target the primary npm registry, and for v0 both are versi
 the testkit declares an exact dependency on the runtime at the same version. `npm run release:check`
 enforces that, and it is part of normal CI.
 
-> **Neither package has been published yet.** Everything below describes how to publish, not
-> something that has already happened. Nothing in this repository publishes on merge, on tag, or on
-> any push: `.github/workflows/publish.yml` is `workflow_dispatch` only, and it is the only file in
-> the repository that contains a publish command.
+> **Bootstrap complete.** Runtime and testkit 0.1.0 were published in August 2026. npm Trusted
+> Publishing is configured for both packages. Normal releases now run from intentional `v*` tags;
+> ordinary pushes, pull requests, and merges never publish.
 
-There are two flows, and they are not interchangeable. The first one happens exactly once per
-package.
+The manual bootstrap below is retained as historical documentation. It was a one-time process and
+must not be repeated for later versions.
 
 ---
 
-## A. One-time bootstrap for 0.1.0
+## A. Completed one-time bootstrap for 0.1.0 (August 2026)
 
 npm cannot attach a Trusted Publisher to a package that does not exist. So the first release of each
-package is published by a maintainer from a local machine, and only afterwards can OIDC publishing be
-configured.
+package had to be published by a maintainer from a local machine before OIDC publishing could be
+configured. These are the steps that were used for 0.1.0; they are not the release path now.
 
 ### Prerequisites
 
@@ -105,67 +104,24 @@ npm view @agent-tool-platform/testkit@0.1.0 dependencies
 
 The second command must show `@agent-tool-platform/runtime: 0.1.0`.
 
-### After publishing: the one-time repository transition
+### Completed repository transition
 
-This repository currently asserts, in code and in tests, that the packages are **not** on npm. Those
-assertions are correct today and become false the moment 0.1.0 is published, so the bootstrap is not
-finished until they are updated.
-
-Do this as a single follow-up commit or pull request, immediately after the manual publish. Until it
-lands, the repository is telling readers something untrue.
-
-1. **Root [`README.md`](../README.md)** — change the status callout near the top, which currently
-   says the packages are prepared for publication but not published, and remove the warning above
-   the install commands that says they will fail with a 404.
-2. **[`packages/runtime/README.md`](../packages/runtime/README.md)** and
-   **[`packages/testkit/README.md`](../packages/testkit/README.md)** — replace the "Not yet on npm"
-   callout in each with the published version.
-3. **This document** — record the bootstrap as completed (which version, roughly when), and change
-   the note at the top that says neither package has been published. Section A stays as the
-   historical record of how the first release happened; it is not repeated for later versions.
-4. **[`scripts/validate-metadata.ts`](../scripts/validate-metadata.ts)** — the `claimPatterns` block
-   rejects npm version badges and links to npm package pages anywhere in the documentation. That rule
-   exists only to prevent claiming a publication that had not happened. Once 0.1.0 is public the rule
-   is wrong, and it will block the README edits above. Remove it, or invert it into a check that a
-   claimed version actually matches the manifests.
-5. **[`tests/packaging.test.ts`](../tests/packaging.test.ts)** — the
-   `does not claim the packages are already published` test asserts the pre-publication wording in
-   both the README and this document. Update it to assert the post-publication wording, or delete it
-   if there is no longer a claim worth pinning. Everything else in that file — metadata, tarball
-   contents, workflow guarantees — stays exactly as it is and must keep passing.
-6. **Run the full suite** before opening the pull request:
-
-   ```bash
-   npm run format:check
-   npm run lint
-   npm run typecheck
-   npm run test:coverage
-   npm run build
-   npm run package:smoke
-   npm run release:check
-   npm run metadata:validate
-   ```
-
-Nothing else changes. In particular the package manifests, the publish workflow, and the version
-stay untouched: this transition is about statements the repository makes, not about what it ships.
+After 0.1.0 was published, the package READMEs and repository status were updated to show supported
+npm installation, and the pre-publication-only assertions in `scripts/validate-metadata.ts` and
+`tests/packaging.test.ts` were replaced with durable metadata, documentation, and workflow
+invariants. Package manifests remained at 0.1.0 throughout this transition.
 
 ---
 
-## B. Future releases through Trusted Publishing
+## B. Normal releases through Trusted Publishing
 
 Once both packages exist on npm, publishing moves into GitHub Actions using OIDC. No long-lived npm
 write token is created, stored in GitHub secrets, or referenced by the workflow.
 
-### Configure the Trusted Publisher on npmjs.com
+### Trusted Publisher configuration
 
-This is a manual, npm-side step. **The existence of `.github/workflows/publish.yml` does not
-configure anything**; until these settings are saved on npmjs.com, an OIDC publish will fail with
-`ENEEDAUTH`.
-
-Do this **once per package** — npm scopes a Trusted Publisher to a single package, so
-`@agent-tool-platform/runtime` and `@agent-tool-platform/testkit` each need their own configuration.
-
-For each package: **npmjs.com → Packages → the package → Settings → Trusted publishing**, then:
+This npm-side setup has been completed **once per package**. npm scopes a Trusted Publisher to a
+single package, so both packages have the following configuration:
 
 | Field                    | Value                 |
 | ------------------------ | --------------------- |
@@ -179,7 +135,7 @@ For each package: **npmjs.com → Packages → the package → Settings → Trus
 Every field is case-sensitive and must match exactly, including the `.yml` extension. Renaming
 `publish.yml` breaks publishing until the npm configuration is updated to match.
 
-Two more things npm requires and this repository already satisfies:
+The workflow also satisfies npm's runner and repository requirements:
 
 - publication must run on a GitHub-hosted runner (self-hosted runners are not accepted),
 - each package's `repository.url` must match this GitHub repository, which `release:check` asserts.
@@ -187,13 +143,17 @@ Two more things npm requires and this repository already satisfies:
 ### Run a release
 
 1. Merge the version change to the default branch. This workflow never bumps a version.
-2. Actions → **Publish** → **Run workflow**, from the default branch, with the version to publish.
-   Use the `dry_run` option first if you want the full validation and a `npm publish --dry-run`
-   without publishing.
-3. The workflow refuses to run from any branch other than the default one, runs format, lint,
-   typecheck, coverage, build, package smoke, `release:check`, and metadata validation, confirms the
-   requested version matches the manifests, confirms neither version already exists on the registry,
-   and only then publishes the runtime followed by the testkit.
+2. Create and push a tag whose name is `v` followed by that exact version, for example `v0.1.1`.
+3. The Publish workflow verifies that the tagged commit is in the default branch history, validates
+   the tag against every manifest and the testkit's exact runtime dependency, and runs format, lint,
+   typecheck, coverage, build, package smoke, `release:check`, and metadata validation.
+4. After confirming both versions are absent from npm, it publishes runtime, waits with bounded
+   retries until that exact version resolves, publishes testkit, and verifies its version and runtime
+   dependency from the registry.
+
+`workflow_dispatch` is available from the default branch for a deliberate dry run or recovery. It
+requires an explicit version that exactly matches all manifests. A dispatch without `dry_run` is a
+real publication operation, not a substitute for the normal tag path.
 
 ### Why no token
 
@@ -216,14 +176,10 @@ long-lived-token path that nobody is using any more.
 ## If a release goes out partially
 
 The runtime publishes before the testkit, so the failure mode with consequences is: runtime
-published, testkit not. The workflow detects exactly this and fails with an explicit partial-release
-message.
-
-Recover by publishing the testkit **at the same version**:
-
-```bash
-npm publish --workspace @agent-tool-platform/testkit --access public
-```
+published, testkit not. The workflow detects this registry state and refuses to treat it as a normal
+release. Recover through `workflow_dispatch` from the default branch with the same version and the
+explicit testkit-only recovery option. The workflow verifies that runtime exists, testkit does not,
+and the manifests still agree before publishing only the testkit.
 
 Do not bump the testkit independently to "get around" the failure: for v0 the versions are locked
 together and the testkit's runtime dependency is exact, so an independent bump produces a pair that

@@ -164,17 +164,33 @@ const runsPublish = (step: WorkflowStep): boolean =>
   typeof step.run === 'string' && /npm publish/u.test(step.run) && !/--dry-run/u.test(step.run);
 
 describe('release workflow', () => {
-  it('is valid YAML with a single manual trigger', () => {
-    expect(Object.keys(workflow.on ?? {})).toEqual(['workflow_dispatch']);
+  it('publishes from version tags or deliberate dispatch, never ordinary pushes or pull requests', () => {
+    const triggers = workflow.on ?? {};
+    expect(Object.keys(triggers)).toEqual(['push', 'workflow_dispatch']);
+    expect(triggers.push).toEqual({ tags: ['v*'] });
+    expect(triggers).not.toHaveProperty('pull_request');
+    expect(triggers).toHaveProperty('workflow_dispatch');
   });
 
   it('requests only the permissions trusted publishing needs', () => {
-    expect(workflow.permissions).toEqual({ contents: 'read' });
+    expect(workflow.permissions).toEqual({ contents: 'read', 'id-token': 'write' });
     expect(publishJob.permissions).toEqual({ contents: 'read', 'id-token': 'write' });
   });
 
   it('runs on a GitHub-hosted runner, which npm requires for OIDC', () => {
     expect(String(publishJob['runs-on'])).toMatch(/^ubuntu-/u);
+  });
+
+  it('uses the Trusted Publishing toolchain without package-manager caching', () => {
+    expect(steps.find((step) => step.uses?.startsWith('actions/checkout'))?.uses).toBe(
+      'actions/checkout@v7',
+    );
+    const setupNode = steps.find((step) => step.uses?.startsWith('actions/setup-node'));
+    expect(setupNode?.uses).toBe('actions/setup-node@v7');
+    expect(setupNode?.with?.['node-version']).toBe(24);
+    expect(setupNode?.with?.['registry-url']).toBe('https://registry.npmjs.org');
+    expect(setupNode?.with?.['package-manager-cache']).toBe(false);
+    expect(setupNode?.with).not.toHaveProperty('cache');
   });
 
   it('installs a pinned npm rather than whatever is newest that day', () => {
@@ -211,11 +227,22 @@ describe('release workflow', () => {
     expect(workflowSource).not.toMatch(/secrets\./u);
   });
 
-  it('refuses to publish from a branch other than the default one', () => {
-    const guard = steps[0];
-    expect(guard?.run).toContain('DEFAULT_BRANCH');
-    expect(guard?.run).toContain('exit 1');
-    expect(indexOfStep(runsPublish)).toBeGreaterThan(0);
+  it('validates tag ancestry and requires dispatch from the default branch', () => {
+    const guard = steps.find((step) => step.id === 'version');
+    expect(guard?.run).toContain('git merge-base --is-ancestor');
+    expect(guard?.run).toContain('origin/$DEFAULT_BRANCH');
+    expect(guard?.run).toContain('"$REF_NAME" != "$DEFAULT_BRANCH"');
+    expect(guard?.run).toContain('Release tags must have the shape v<package-version>');
+  });
+
+  it('derives the tag version and matches every manifest value exactly', () => {
+    const guard = steps.find((step) => step.id === 'version');
+    expect(guard?.run).toContain('requested="${REF_NAME#v}"');
+    expect(guard?.run).toContain("require('./package.json').version");
+    expect(guard?.run).toContain("require('./packages/runtime/package.json').version");
+    expect(guard?.run).toContain("require('./packages/testkit/package.json').version");
+    expect(guard?.run).toContain("dependencies['@agent-tool-platform/runtime']");
+    expect(guard?.run).toContain('"$dependency" != "$requested"');
   });
 
   it('completes the entire validation suite before anything is published', () => {
@@ -251,19 +278,42 @@ describe('release workflow', () => {
     expect(steps[testkitAt]?.run).toContain('--workspace @agent-tool-platform/testkit');
   });
 
-  it('refuses to republish an existing version and never forces one', () => {
-    const guard = steps.find((step) => (step.run ?? '').includes('assert_absent'));
-    expect(guard?.run).toContain('immutable');
+  it('handles absent, complete, partial, and inverted registry states explicitly', () => {
+    const guard = steps.find((step) => step.id === 'registry');
+    expect(guard?.run).toContain('mode="normal"');
+    expect(guard?.run).toContain('already released; npm versions are immutable');
+    expect(guard?.run).toContain('mode="recover-testkit"');
+    expect(guard?.run).toContain('Partial release detected');
+    expect(guard?.run).toContain('Broken release state');
+    expect(guard?.run).toContain('RECOVER_TESTKIT_ONLY');
     expect(workflowSource).not.toMatch(/npm publish[^\n]*--force/u);
   });
 
-  it('reports a partial release instead of failing silently', () => {
+  it('waits for registry propagation and verifies the published dependency', () => {
+    const runtimeWait = indexOfStep((step) =>
+      (step.run ?? '').includes('runtime@$VERSION registry propagation'),
+    );
+    const testkitPublish = indexOfStep(
+      (step) => runsPublish(step) && (step.run ?? '').includes(testkitName),
+    );
+    const testkitVerify = indexOfStep((step) => (step.run ?? '').includes('runtime_dependency'));
+    expect(runtimeWait).toBeGreaterThan(
+      indexOfStep((step) => runsPublish(step) && (step.run ?? '').includes(runtimeName)),
+    );
+    expect(testkitPublish).toBeGreaterThan(runtimeWait);
+    expect(testkitVerify).toBeGreaterThan(testkitPublish);
+    expect(steps[runtimeWait]?.run).toContain('seq 1 18');
+    expect(steps[testkitVerify]?.run).toContain("['@agent-tool-platform/runtime']");
+  });
+
+  it('reports partial releases with the deliberate recovery path', () => {
     const report = steps.find((step) => (step.run ?? '').includes('PARTIAL RELEASE'));
-    expect(report?.if).toContain('failure()');
-    expect(report?.if).toContain("steps.publish-runtime.outcome == 'success'");
-    expect(report?.run).toContain('the same version');
-    // Recovery is republishing the testkit at the same version, never an independent bump.
-    expect(report?.run).toContain('lockstep');
+    const fallbackReport =
+      report ?? steps.find((step) => (step.run ?? '').includes('recover_testkit_only'));
+    expect(fallbackReport?.if).toContain('failure()');
+    expect(fallbackReport?.run).toContain('workflow_dispatch');
+    expect(fallbackReport?.run).toContain('recover_testkit_only');
+    expect(fallbackReport?.run).toContain('Do not republish');
   });
 });
 
@@ -310,22 +360,12 @@ describe('release documentation', () => {
     expect(releasing).not.toMatch(/the only fix is another version/iu);
   });
 
-  it('documents the one-time repository transition that follows the bootstrap', () => {
-    const transition = releasing.slice(releasing.indexOf('the one-time repository transition'));
-    expect(transition.length).toBeGreaterThan(0);
-    for (const target of [
-      'README.md',
-      'packages/runtime/README.md',
-      'packages/testkit/README.md',
-      'scripts/validate-metadata.ts',
-      'tests/packaging.test.ts',
-      'npm run test:coverage',
-      'npm run package:smoke',
-      'npm run release:check',
-      'npm run metadata:validate',
-    ]) {
-      expect(transition, `the transition must name ${target}`).toContain(target);
-    }
+  it('records the completed bootstrap while preserving it as one-time history', () => {
+    expect(releasing).toContain('August 2026');
+    expect(releasing).toMatch(/Bootstrap complete/iu);
+    expect(releasing).toMatch(/historical documentation/iu);
+    expect(releasing).toMatch(/must not be repeated/iu);
+    expect(releasing).toContain('Completed repository transition');
   });
 
   it('documents the npm-side Trusted Publisher configuration', () => {
@@ -342,20 +382,26 @@ describe('release documentation', () => {
     expect(releasing).toMatch(/two-factor authentication and disallow tokens/iu);
   });
 
-  // PRE-PUBLICATION ONLY. This assertion becomes false the moment 0.1.0 is published and must be
-  // updated or deleted in the follow-up transition described in `docs/releasing.md`. It is the only
-  // test in this file that expires; everything else above holds for every future release.
-  it('does not claim the packages are already published', () => {
-    expect(releasing).toMatch(/has been published|has not been published|not been published/u);
-    for (const document of [releasing, readme]) {
-      expect(document).not.toMatch(/shields\.io\/npm\//u);
+  it('states that 0.1.0 is public and contains no stale unpublished claim', () => {
+    const documents = [
+      releasing,
+      readme,
+      read('packages/runtime/README.md'),
+      read('packages/testkit/README.md'),
+    ];
+    expect(releasing).toMatch(/0\.1\.0 were published in August 2026/iu);
+    expect(readme).toMatch(/0\.1\.0 are publicly available from npm/iu);
+    for (const document of documents) {
+      expect(document).not.toMatch(
+        /packages? (?:has|have) not been published|not (?:yet )?published on npm/iu,
+      );
     }
-    expect(readme).toMatch(/(has|have) not been published|Neither has been published yet/u);
+    expect(read('scripts/validate-metadata.ts')).not.toContain('PRE-PUBLICATION ONLY');
   });
 
   it('documents the consumer installation for both packages', () => {
     expect(readme).toContain('npm install @agent-tool-platform/runtime');
-    expect(readme).toContain('npm install --save-dev @agent-tool-platform/testkit');
+    expect(readme).toContain('npm install -D @agent-tool-platform/testkit');
     expect(readme).toContain('lockstep');
   });
 
