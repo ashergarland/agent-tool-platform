@@ -176,6 +176,43 @@ await startAgentToolApplication(capability);
 `createAgentToolApplication(capability)` returns the assembled application without binding a
 listener, which is what tests use.
 
+### Local stdio entry points
+
+A capability launched by an agent host over stdio uses the stdio helper instead. It is the
+preferred startup mechanism for a local entry point, and it owns the same mechanics every stdio
+capability would otherwise rewrite: a silent logger, local execution semantics, the application,
+the capability lifecycle, the MCP server, the transport, signal handling, ordered teardown, and a
+truthful exit code.
+
+```ts
+import { startStdioAgentToolApplication } from '@agent-tool-platform/runtime';
+import capability from './capability.js';
+
+await startStdioAgentToolApplication(capability, {
+  // The capability's own environment policy — the platform never learns what this variable means.
+  env: {
+    ...process.env,
+    CAPABILITY_WORKSPACE_ROOT: process.env.CAPABILITY_WORKSPACE_ROOT?.trim() || process.cwd(),
+  },
+});
+```
+
+It returns `{ application, server, transport, close }`, so a test or an advanced caller can reach
+the same application object `createAgentToolApplication` would have produced, and tear it down
+without reimplementing the order.
+
+**No HTTP listener is bound**, and nothing but protocol traffic reaches stdout. stdio is a local
+pipe owned by the process that launched it, so the platform applies local execution semantics over
+whatever environment it is handed: authentication is disabled because the stdio principal is fixed
+and anonymous, `NODE_ENV` is `development` unless the caller is testing, and the host is loopback.
+Those values are applied **after** the caller's environment, so an inherited production environment
+cannot decide how a local pipe runs — and cannot turn one into an unauthenticated hosted service,
+because no listener exists to reach. Hosted HTTP is unaffected: disabled authentication is still
+refused in production there.
+
+Capability-specific variables pass through untouched. The platform does not know what
+`AST_WORKSPACE_ROOT`, `DATA_ROOT`, or `DOCS_PATH` mean, and it must not learn.
+
 ### Who owns what
 
 | The runtime owns                        | The capability owns             |
@@ -187,6 +224,7 @@ listener, which is what tests use.
 | Registry construction                   | Domain safety policy            |
 | HTTP server                             | Domain readiness                |
 | MCP servers (stdio and Streamable HTTP) | Genuine domain extension routes |
+| HTTP and stdio startup and shutdown     | Domain environment defaults     |
 | OpenAPI generation                      | Domain telemetry estimates      |
 | Readiness aggregation                   |                                 |
 | Request identity                        |                                 |
@@ -395,6 +433,10 @@ database. Transports and servers are closed on every path, including failure, so
 
 `ToolInvocationContext.transport` is always accurate: `http`, `mcp-stdio`, or `mcp-http`.
 
+A local stdio process is started with `startStdioAgentToolApplication(capability, options)`, which
+connects the platform stdio transport to the same registry and services and never binds a listener.
+See [Local stdio entry points](#local-stdio-entry-points).
+
 ---
 
 ## OpenAPI
@@ -450,6 +492,17 @@ throughout, so an orchestrator can still observe a draining replica. `/ready` re
 
 When `startAgentToolApplication` installs signal handlers, a clean shutdown exits `0` and a failed
 or timed-out shutdown exits non-zero, so an orchestrator can tell the difference.
+`startStdioAgentToolApplication` uses the same handler — one signal sequence, one set of exit-code
+semantics — and differs only in what teardown means: it drains the application, runs the capability
+`stop` hook, and closes the MCP server last, exactly where HTTP closes its listener.
+
+Only the first signal starts teardown, and teardown itself is memoised, so a `SIGTERM` chasing a
+`SIGINT` cannot run the capability `stop` hook twice. Later signals are **swallowed** rather than
+ignored: the handlers stay installed until teardown settles, because a detached handler returns the
+next signal to Node's default action, which kills the process part-way through its own teardown and
+reports the signal instead of whether the capability actually stopped. Holding the signal is not
+open-ended — the backstop timer always ends the process, and it is deliberately referenced so a
+stuck teardown cannot exit `0` through an emptied event loop.
 
 ---
 

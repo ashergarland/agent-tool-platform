@@ -12,6 +12,7 @@ import {
   type ReadinessReport,
   type ReadinessResult,
 } from '../lifecycle/index.js';
+import { installShutdownSignalHandlers } from '../lifecycle/signals.js';
 import { createLogger } from '../logging/logger.js';
 import { createStdioMcpServer } from '../mcp/stdio.js';
 import { buildOpenApiDocument } from '../openapi/document.js';
@@ -259,37 +260,12 @@ export const startAgentToolApplication = async <
   });
 
   if (options.handleSignals !== false) {
-    const stop = (signal: NodeJS.Signals): void => {
-      application.logger.info({ event: 'shutdown.signal', signal }, 'shutting down');
-      // A hard backstop in case teardown itself hangs. `shutdown()` already bounds its own wait for
-      // in-flight work, so reaching this timer means something below that is stuck; the extra
-      // second keeps the two budgets from racing each other to the millisecond.
-      const graceMs = Math.max(1, application.config.http.shutdownGraceMs) + 1000;
-      const timer = setTimeout(() => {
-        application.logger.error(
-          { event: 'shutdown.timeout', graceMs },
-          'shutdown did not complete within the grace period; exiting non-zero',
-        );
-        process.exit(1);
-      }, graceMs);
-      timer.unref?.();
-
-      void application
-        .shutdown()
-        .then(() => {
-          clearTimeout(timer);
-          process.exit(0);
-        })
-        .catch((error: unknown) => {
-          // A failed shutdown must not look like a clean one: an orchestrator restarting the
-          // replica needs to know teardown did not complete.
-          application.logger.error({ err: error, event: 'shutdown.failed' }, 'shutdown failed');
-          clearTimeout(timer);
-          process.exit(1);
-        });
-    };
-    process.once('SIGINT', () => stop('SIGINT'));
-    process.once('SIGTERM', () => stop('SIGTERM'));
+    // Shared with the stdio entry point: one signal sequence, one set of exit-code semantics.
+    installShutdownSignalHandlers({
+      logger: application.logger,
+      graceMs: application.config.http.shutdownGraceMs,
+      shutdown: () => application.shutdown(),
+    });
   }
 
   return application;

@@ -46,39 +46,60 @@ const note = (message) => process.stdout.write(`${message}\n`);
 const readManifest = (path) => JSON.parse(readFileSync(path, 'utf8'));
 const rootLicense = readFileSync(join(repositoryRoot, 'LICENSE'));
 
-/** Exports the README documents. A rename here is a breaking change for every capability. */
+/**
+ * Exports the README documents, per documented entry point. A rename here is a breaking change for
+ * every capability.
+ *
+ * Subpath entries are not decoration: a capability that imports `@agent-tool-platform/runtime/
+ * capability` must receive the same startup helpers as the root export, and only checking the root
+ * would let a subpath silently lose one.
+ */
 const documentedExports = {
-  '@agent-tool-platform/runtime': [
-    'defineAgentToolCapability',
-    'createAgentToolApplication',
-    'startAgentToolApplication',
-    'defineTool',
-    'ToolRegistry',
-    'AppError',
-    'createAuthenticator',
-    'buildOpenApiDocument',
-    'createMcpServer',
-    'createHttpServer',
-    'RootBoundary',
-    'runBoundedProcess',
-    'MutationGate',
-    'noopTelemetrySink',
-    'assertCapabilityMetadata',
-  ],
-  '@agent-tool-platform/testkit': [
-    'runRegistryConformance',
-    'runMcpConformance',
-    'runHttpConformance',
-    'runOpenApiConformance',
-    'runTransportParity',
-    'runAuthConformance',
-    'runConfigConformance',
-    'runRoutingConformance',
-    'runLifecycleConformance',
-    'runRootBoundaryConformance',
-    'runProcessConformance',
-    'runMetadataConformance',
-  ],
+  '@agent-tool-platform/runtime': {
+    '.': [
+      'defineAgentToolCapability',
+      'createAgentToolApplication',
+      'startAgentToolApplication',
+      'startStdioAgentToolApplication',
+      'defineTool',
+      'ToolRegistry',
+      'AppError',
+      'createAuthenticator',
+      'buildOpenApiDocument',
+      'createMcpServer',
+      'createHttpServer',
+      'connectStdio',
+      'installShutdownSignalHandlers',
+      'RootBoundary',
+      'runBoundedProcess',
+      'MutationGate',
+      'noopTelemetrySink',
+      'assertCapabilityMetadata',
+    ],
+    './capability': [
+      'createAgentToolApplication',
+      'startAgentToolApplication',
+      'startStdioAgentToolApplication',
+    ],
+    './lifecycle': ['ApplicationLifecycle', 'installShutdownSignalHandlers'],
+    './mcp': ['createMcpServer', 'createStdioMcpServer', 'connectStdio'],
+  },
+  '@agent-tool-platform/testkit': {
+    '.': [
+      'runRegistryConformance',
+      'runMcpConformance',
+      'runHttpConformance',
+      'runOpenApiConformance',
+      'runTransportParity',
+      'runAuthConformance',
+      'runConfigConformance',
+      'runRoutingConformance',
+      'runLifecycleConformance',
+      'runRootBoundaryConformance',
+      'runProcessConformance',
+      'runMetadataConformance',
+    ],
+  },
 };
 
 const publishable = [
@@ -203,7 +224,7 @@ const createConsumer = (label, packed, entryPackage) => {
   return { root, modules, entryPackage };
 };
 
-const importConsumerSource = (consumerRoot, specifiers, expectedNames, packageNames) => {
+const importConsumerSource = (consumerRoot, specifiers, expectations, packageNames) => {
   const imports = specifiers
     .map((specifier, index) => `import * as namespace${index} from '${specifier}';`)
     .join('\n');
@@ -222,8 +243,10 @@ namespaces.forEach((namespace, index) => {
   }
 });
 
-for (const name of ${JSON.stringify(expectedNames)}) {
-  if (!(name in namespace0)) failures.push(specifiers[0] + ' does not export ' + name);
+for (const { index, names } of ${JSON.stringify(expectations)}) {
+  for (const name of names) {
+    if (!(name in namespaces[index])) failures.push(specifiers[index] + ' does not export ' + name);
+  }
 }
 
 // Every platform package must resolve inside this throwaway project. Resolving anywhere else would
@@ -246,13 +269,18 @@ console.log('ok');
 `;
 };
 
-const typeConsumerSource = (specifiers, expectedNames) => {
+const typeConsumerSource = (specifiers, expectations) => {
   const imports = specifiers
     .map((specifier, index) => `import * as namespace${index} from '${specifier}';`)
     .join('\n');
   const uses = specifiers.map((_, index) => `void namespace${index};`).join('\n');
-  const named = expectedNames
-    .map((name) => `const check_${name}: unknown = namespace0.${name};\nvoid check_${name};`)
+  const named = expectations
+    .flatMap(({ index, names }) =>
+      names.map(
+        (name) =>
+          `const check_${index}_${name}: unknown = namespace${index}.${name};\nvoid check_${index}_${name};`,
+      ),
+    )
     .join('\n');
   return `${imports}\n\n${uses}\n\n${named}\n`;
 };
@@ -260,15 +288,28 @@ const typeConsumerSource = (specifiers, expectedNames) => {
 const exerciseConsumer = (consumer, packed) => {
   const entry = consumer.entryPackage;
   const manifest = readManifest(join(consumer.modules, ...entry.split('/'), 'package.json'));
-  const specifiers = documentedSubpaths(manifest).map((subpath) =>
+  const subpaths = documentedSubpaths(manifest);
+  const specifiers = subpaths.map((subpath) =>
     subpath === '.' ? entry : `${entry}${subpath.slice(1)}`,
   );
-  const expectedNames = documentedExports[entry];
+  const expected = documentedExports[entry];
   const packageNames = Object.keys(packed);
+
+  // A documented export list that names an entry point the package does not publish is drift in
+  // this script, and would otherwise pass by silently checking nothing.
+  for (const subpath of Object.keys(expected)) {
+    if (!subpaths.includes(subpath)) {
+      fail(`${entry}: documented exports name ${subpath}, which the package does not publish`);
+    }
+  }
+
+  const expectations = subpaths
+    .map((subpath, index) => ({ index, names: expected[subpath] ?? [] }))
+    .filter(({ names }) => names.length > 0);
 
   writeFileSync(
     join(consumer.root, 'consumer.mjs'),
-    importConsumerSource(consumer.root, specifiers, expectedNames, packageNames),
+    importConsumerSource(consumer.root, specifiers, expectations, packageNames),
   );
   try {
     execFileSync(process.execPath, [join(consumer.root, 'consumer.mjs')], {
@@ -286,7 +327,7 @@ const exerciseConsumer = (consumer, packed) => {
     return;
   }
 
-  writeFileSync(join(consumer.root, 'consumer.ts'), typeConsumerSource(specifiers, expectedNames));
+  writeFileSync(join(consumer.root, 'consumer.ts'), typeConsumerSource(specifiers, expectations));
   writeFileSync(
     join(consumer.root, 'tsconfig.json'),
     `${JSON.stringify(

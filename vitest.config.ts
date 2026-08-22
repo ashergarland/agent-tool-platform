@@ -21,7 +21,11 @@ export default defineConfig({
       include: ['packages/*/src/**/*.ts', 'examples/*/src/**/*.ts'],
       // Process entry points execute on import and are covered by the container-free CLI tests
       // rather than by unit tests that would spawn a real server on module load.
-      exclude: ['packages/*/src/**/index.ts', 'packages/runtime/src/mcp/stdio-entry.ts'],
+      exclude: [
+        'packages/*/src/**/index.ts',
+        'packages/runtime/src/mcp/stdio-entry.ts',
+        'examples/minimal-capability/src/stdio-entry.ts',
+      ],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 70 },
     },
   },
