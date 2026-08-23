@@ -1,0 +1,80 @@
+name: Reusable capability CI
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: 'Node.js version used for capability validation'
+        required: false
+        default: '22'
+        type: string
+      openapi_path:
+        description: 'Path written by npm run openapi:emit'
+        required: false
+        default: 'openapi.json'
+        type: string
+      run_package_smoke:
+        description: 'Require the publication package smoke test'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  capability:
+    name: Capability quality gates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Reusable workflows intentionally check out the caller repository.
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test with coverage
+        run: npm run test:coverage
+
+      - name: Build
+        run: npm run build
+
+      - name: Generate OpenAPI
+        run: npm run openapi:emit
+
+      - name: Validate metadata
+        run: npm run metadata:validate
+
+      - name: Smoke test the packed package
+        if: ${{ inputs.run_package_smoke }}
+        run: npm run package:smoke
+
+      - name: Upload generated OpenAPI
+        uses: actions/upload-artifact@v7
+        with:
+          name: capability-openapi
+          path: ${{ inputs.openapi_path }}
+          if-no-files-found: error
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: capability-coverage
+          path: coverage/lcov.info
+          if-no-files-found: ignore
