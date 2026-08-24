@@ -1,0 +1,639 @@
+name: Reusable capability release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Exact version for a manual dry run or GitHub Release recovery'
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'Validate and run npm publish --dry-run without publishing'
+        required: false
+        default: false
+        type: boolean
+      recover_github_release:
+        description: 'Create a missing GitHub Release for an already-published verified version'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: capability-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Validate and publish capability
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      # Reusable workflows intentionally check out the caller repository.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Validate the release ref and version
+        id: version
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DISPATCH_VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          EVENT_NAME: ${{ github.event_name }}
+          RECOVER_GITHUB_RELEASE: ${{ inputs.recover_github_release }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+
+          version_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            if [ "$REF_TYPE" != "tag" ] || [[ ! "$REF_NAME" =~ ^v${version_pattern#^} ]]; then
+              echo "::error::Normal releases require a pushed stable-semver tag with the shape vX.Y.Z; received $REF_NAME."
+              exit 1
+            fi
+
+            requested="${REF_NAME#v}"
+            release_tag="$REF_NAME"
+            git fetch --no-tags origin "$DEFAULT_BRANCH"
+            release_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+            if ! git merge-base --is-ancestor "$release_commit" "origin/$DEFAULT_BRANCH"; then
+              echo "::error::Tag $REF_NAME does not point to a commit in $DEFAULT_BRANCH history."
+              exit 1
+            fi
+            mode="normal"
+            source="tag $REF_NAME"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
+              echo "::error::Manual dry runs and recoveries must start from $DEFAULT_BRANCH; selected $REF_NAME."
+              exit 1
+            fi
+            if [[ ! "$DISPATCH_VERSION" =~ $version_pattern ]]; then
+              echo "::error::Manual execution requires an exact stable semantic version; received $DISPATCH_VERSION."
+              exit 1
+            fi
+            if [ "$DRY_RUN" = "true" ] && [ "$RECOVER_GITHUB_RELEASE" = "true" ]; then
+              echo "::error::Choose either dry-run validation or GitHub Release recovery, not both."
+              exit 1
+            fi
+            if [ "$DRY_RUN" != "true" ] && [ "$RECOVER_GITHUB_RELEASE" != "true" ]; then
+              echo "::error::workflow_dispatch cannot perform an ordinary release. Enable dry_run or explicit recover_github_release; normal publication requires a pushed tag."
+              exit 1
+            fi
+
+            requested="$DISPATCH_VERSION"
+            release_tag="v$requested"
+            if [ "$RECOVER_GITHUB_RELEASE" = "true" ]; then
+              git fetch --force --no-tags origin "refs/tags/$release_tag:refs/tags/$release_tag"
+              git fetch --no-tags origin "$DEFAULT_BRANCH"
+              release_commit="$(git rev-parse "${release_tag}^{commit}")"
+              if ! git merge-base --is-ancestor "$release_commit" "origin/$DEFAULT_BRANCH"; then
+                echo "::error::Recovery tag $release_tag does not point to a commit in $DEFAULT_BRANCH history."
+                exit 1
+              fi
+              git checkout --detach "$release_commit"
+              mode="recover-github-release"
+              source="recovery for tag $release_tag"
+            else
+              release_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+              mode="dry-run"
+              source="dry run on $REF_NAME"
+            fi
+          else
+            echo "::error::Unsupported caller event: $EVENT_NAME."
+            exit 1
+          fi
+
+          echo "version=$requested" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "release_commit=$release_commit" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "Validated $source for version $requested."
+
+      - name: Install a pinned npm that supports trusted publishing
+        env:
+          NPM_VERSION: '11.19.0'
+          NPM_TRUSTED_PUBLISHING_MINIMUM: '11.5.1'
+        run: |
+          set -euo pipefail
+          npm install -g "npm@${NPM_VERSION}"
+          installed="$(npm --version)"
+          if [ "$installed" != "$NPM_VERSION" ]; then
+            echo "::error::Expected npm $NPM_VERSION but the runner has $installed."
+            exit 1
+          fi
+          if [ "$(printf '%s\n%s\n' "$NPM_TRUSTED_PUBLISHING_MINIMUM" "$installed" | sort -V | head -n1)" != "$NPM_TRUSTED_PUBLISHING_MINIMUM" ]; then
+            echo "::error::npm $installed cannot perform OIDC trusted publishing; $NPM_TRUSTED_PUBLISHING_MINIMUM or newer is required."
+            exit 1
+          fi
+
+      - name: Install dependencies from the lockfile
+        if: ${{ steps.version.outputs.mode != 'recover-github-release' }}
+        run: npm ci
+
+      - name: Validate the development package
+        id: package
+        env:
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+        run: |
+          node <<'NODE'
+          const { appendFileSync, readFileSync } = require('node:fs');
+
+          const fail = (message) => {
+            console.error(`::error::${message}`);
+            process.exit(1);
+          };
+          const normalizeGitHubRepository = (repository) => {
+            let value =
+              typeof repository === 'string'
+                ? repository
+                : repository && typeof repository.url === 'string'
+                  ? repository.url
+                  : '';
+            value = value
+              .trim()
+              .replace(/^git\+/u, '')
+              .replace(/^github:/u, 'https://github.com/')
+              .replace(/^git@github\.com:/u, 'https://github.com/')
+              .replace(/^ssh:\/\/git@github\.com\//u, 'https://github.com/');
+            const marker = 'github.com/';
+            const markerAt = value.toLowerCase().indexOf(marker);
+            if (markerAt < 0) return '';
+            const path = value
+              .slice(markerAt + marker.length)
+              .split('#', 1)[0]
+              .replace(/\/+$/u, '')
+              .replace(/\.git$/u, '');
+            const parts = path.split('/');
+            return parts.length === 2 && parts.every(Boolean) ? parts.join('/').toLowerCase() : '';
+          };
+
+          const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+          const server = JSON.parse(readFileSync('server.json', 'utf8'));
+          const lockRoot = lock.packages?.[''];
+          const developmentVersion = '0.0.0-development';
+          const namePattern = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/u;
+
+          if (manifest.private === true) fail('The root package is private and cannot be published.');
+          if (
+            typeof manifest.name !== 'string' ||
+            manifest.name.length > 214 ||
+            !namePattern.test(manifest.name) ||
+            ['node_modules', 'favicon.ico'].includes(manifest.name)
+          ) {
+            fail('package.json must contain a valid public npm package name.');
+          }
+          if (manifest.version !== developmentVersion) {
+            fail(`Checked-in package version must be ${developmentVersion}; received ${manifest.version}.`);
+          }
+          if (manifest.workspaces !== undefined) {
+            fail('The capability release workflow publishes one root package and does not accept workspaces.');
+          }
+          if (
+            manifest.publishConfig?.registry !== undefined &&
+            manifest.publishConfig.registry !== 'https://registry.npmjs.org' &&
+            manifest.publishConfig.registry !== 'https://registry.npmjs.org/'
+          ) {
+            fail('publishConfig.registry must be the public npm registry when it is present.');
+          }
+          if (
+            manifest.publishConfig?.access !== undefined &&
+            manifest.publishConfig.access !== 'public'
+          ) {
+            fail('publishConfig.access must be public when it is present.');
+          }
+          if (
+            manifest.publishConfig?.tag !== undefined &&
+            manifest.publishConfig.tag !== 'latest'
+          ) {
+            fail('Stable capability releases must use the latest npm distribution tag.');
+          }
+          if (!lockRoot || lock.name !== manifest.name || lockRoot.name !== manifest.name) {
+            fail('package-lock.json does not describe the expected root package.');
+          }
+          if (lock.version !== developmentVersion || lockRoot.version !== developmentVersion) {
+            fail(`Checked-in lockfile version must be ${developmentVersion}.`);
+          }
+          const repository = normalizeGitHubRepository(manifest.repository);
+          if (repository !== process.env.EXPECTED_REPOSITORY.toLowerCase()) {
+            fail(
+              `Package repository metadata must point to ${process.env.EXPECTED_REPOSITORY}; received ${repository || 'no GitHub repository'}.`,
+            );
+          }
+          if (server.version !== developmentVersion) {
+            fail(`Checked-in server.json version must be ${developmentVersion}.`);
+          }
+          const npmPackages = Array.isArray(server.packages)
+            ? server.packages.filter((entry) => entry?.registryType === 'npm')
+            : [];
+          if (
+            npmPackages.length !== 1 ||
+            npmPackages[0].identifier !== manifest.name ||
+            npmPackages[0].version !== developmentVersion
+          ) {
+            fail(
+              'server.json must declare exactly the root npm package at 0.0.0-development.',
+            );
+          }
+
+          appendFileSync(process.env.GITHUB_OUTPUT, `package_name=${manifest.name}\n`);
+          console.log(`Validated root package ${manifest.name} in development state.`);
+          NODE
+
+      - name: Stamp the release version ephemerally
+        if: ${{ steps.version.outputs.mode != 'recover-github-release' }}
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: npm version "$RELEASE_VERSION" --no-git-tag-version --ignore-scripts
+
+      - name: Stamp capability metadata ephemerally
+        if: ${{ steps.version.outputs.mode != 'recover-github-release' }}
+        env:
+          EXPECTED_COMMIT: ${{ steps.version.outputs.release_commit }}
+          EXPECTED_NAME: ${{ steps.package.outputs.package_name }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node <<'NODE'
+          const { readFileSync, writeFileSync } = require('node:fs');
+
+          const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
+          const server = JSON.parse(readFileSync('server.json', 'utf8'));
+          manifest.gitHead = process.env.EXPECTED_COMMIT;
+          server.version = process.env.RELEASE_VERSION;
+          for (const declared of server.packages) {
+            if (declared.registryType === 'npm' && declared.identifier === process.env.EXPECTED_NAME) {
+              declared.version = process.env.RELEASE_VERSION;
+            }
+          }
+          writeFileSync('package.json', `${JSON.stringify(manifest, undefined, 2)}\n`);
+          writeFileSync('server.json', `${JSON.stringify(server, undefined, 2)}\n`);
+          NODE
+
+      - name: Verify the stamped package and lockfile
+        if: ${{ steps.version.outputs.mode != 'recover-github-release' }}
+        env:
+          EXPECTED_COMMIT: ${{ steps.version.outputs.release_commit }}
+          EXPECTED_NAME: ${{ steps.package.outputs.package_name }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+          const server = JSON.parse(readFileSync('server.json', 'utf8'));
+          const lockRoot = lock.packages?.[''];
+          for (const [label, actual] of [
+            ['package.json name', manifest.name],
+            ['package-lock.json name', lock.name],
+            ['package-lock root name', lockRoot?.name],
+          ]) {
+            if (actual !== process.env.EXPECTED_NAME) {
+              console.error(`::error::${label} changed unexpectedly to ${actual}.`);
+              process.exit(1);
+            }
+          }
+          for (const [label, actual] of [
+            ['package.json version', manifest.version],
+            ['package-lock.json version', lock.version],
+            ['package-lock root version', lockRoot?.version],
+            ['server.json version', server.version],
+          ]) {
+            if (actual !== process.env.RELEASE_VERSION) {
+              console.error(
+                `::error::${label} must be ${process.env.RELEASE_VERSION}; received ${actual}.`,
+              );
+              process.exit(1);
+            }
+          }
+          if (manifest.gitHead !== process.env.EXPECTED_COMMIT) {
+            console.error(
+              `::error::package.json gitHead must be ${process.env.EXPECTED_COMMIT}.`,
+            );
+            process.exit(1);
+          }
+          const npmPackages = server.packages.filter((entry) => entry.registryType === 'npm');
+          if (
+            npmPackages.length !== 1 ||
+            npmPackages[0].identifier !== process.env.EXPECTED_NAME ||
+            npmPackages[0].version !== process.env.RELEASE_VERSION
+          ) {
+            console.error('::error::server.json does not describe the stamped root npm package.');
+            process.exit(1);
+          }
+          NODE
+
+          while IFS= read -r changed; do
+            if [ "$changed" != "package.json" ] && [ "$changed" != "package-lock.json" ] && [ "$changed" != "server.json" ]; then
+              echo "::error::Version stamping unexpectedly changed $changed."
+              exit 1
+            fi
+          done < <(git diff --name-only)
+
+      - name: Check formatting
+        if: ${{ steps.version.outputs.mode != 'recover-github-release' }}
+        run: npm run format:check
+
+      - name: Lint
+        if: ${{ steps.version.outputs.mode != 'recover-github-release' }}
+        run: npm run lint
+
+      - name: Typecheck
+        if: ${{ steps.version.outputs.mode != 'recover-github-release' }}
+        run: npm run typecheck
+
+      - name: Test with coverage
+        if: ${{ steps.version.outputs.mode != 'recover-github-release' }}
+        run: npm run test:coverage
+
+      - name: Build
+        if: ${{ steps.version.outputs.mode != 'recover-github-release' }}
+        run: npm run build
+
+      - name: Generate OpenAPI
+        if: ${{ steps.version.outputs.mode != 'recover-github-release' }}
+        run: npm run openapi:emit
+
+      - name: Validate metadata
+        if: ${{ steps.version.outputs.mode != 'recover-github-release' }}
+        run: npm run metadata:validate
+
+      - name: Smoke test the packed package
+        if: ${{ steps.version.outputs.mode != 'recover-github-release' }}
+        run: npm run package:smoke
+
+      - name: Pack and validate the root publication target
+        id: tarball
+        if: ${{ steps.version.outputs.mode != 'recover-github-release' }}
+        env:
+          EXPECTED_NAME: ${{ steps.package.outputs.package_name }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP" \
+            > "$RUNNER_TEMP/capability-pack.json"
+          node <<'NODE'
+          const { appendFileSync, existsSync, readFileSync } = require('node:fs');
+          const { join } = require('node:path');
+          const result = JSON.parse(
+            readFileSync(`${process.env.RUNNER_TEMP}/capability-pack.json`, 'utf8'),
+          );
+          if (
+            !Array.isArray(result) ||
+            result.length !== 1 ||
+            result[0]?.name !== process.env.EXPECTED_NAME ||
+            result[0]?.version !== process.env.RELEASE_VERSION
+          ) {
+            console.error('::error::npm pack did not select the expected root package and version.');
+            process.exit(1);
+          }
+          const tarball = join(process.env.RUNNER_TEMP, result[0].filename);
+          if (!existsSync(tarball)) {
+            console.error(`::error::npm pack did not create ${tarball}.`);
+            process.exit(1);
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `path=${tarball}\n`);
+          NODE
+
+      - name: Inspect registry state
+        id: registry
+        env:
+          EXPECTED_COMMIT: ${{ steps.version.outputs.release_commit }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          MODE: ${{ steps.version.outputs.mode }}
+          PACKAGE_NAME: ${{ steps.package.outputs.package_name }}
+          REGISTRY_URL: 'https://registry.npmjs.org'
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          cat > "$RUNNER_TEMP/validate-capability-registry.cjs" <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const fail = (message) => {
+            console.error(`::error::${message}`);
+            process.exit(1);
+          };
+          const normalizeGitHubRepository = (repository) => {
+            let value =
+              typeof repository === 'string'
+                ? repository
+                : repository && typeof repository.url === 'string'
+                  ? repository.url
+                  : '';
+            value = value
+              .trim()
+              .replace(/^git\+/u, '')
+              .replace(/^github:/u, 'https://github.com/')
+              .replace(/^git@github\.com:/u, 'https://github.com/')
+              .replace(/^ssh:\/\/git@github\.com\//u, 'https://github.com/');
+            const marker = 'github.com/';
+            const markerAt = value.toLowerCase().indexOf(marker);
+            if (markerAt < 0) return '';
+            const path = value
+              .slice(markerAt + marker.length)
+              .split('#', 1)[0]
+              .replace(/\/+$/u, '')
+              .replace(/\.git$/u, '');
+            const parts = path.split('/');
+            return parts.length === 2 && parts.every(Boolean) ? parts.join('/').toLowerCase() : '';
+          };
+
+          const metadata = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          const integrity = metadata.dist?.integrity ?? metadata['dist.integrity'];
+          if (metadata.version !== process.env.VERSION) {
+            fail(`Registry returned version ${metadata.version}; expected ${process.env.VERSION}.`);
+          }
+          if (metadata.gitHead !== process.env.EXPECTED_COMMIT) {
+            fail(
+              `Registry gitHead ${metadata.gitHead || 'is absent'}; expected ${process.env.EXPECTED_COMMIT}.`,
+            );
+          }
+          if (
+            normalizeGitHubRepository(metadata.repository) !==
+            process.env.EXPECTED_REPOSITORY.toLowerCase()
+          ) {
+            fail(`Registry repository metadata does not identify ${process.env.EXPECTED_REPOSITORY}.`);
+          }
+          if (typeof integrity !== 'string' || !integrity.startsWith('sha')) {
+            fail('Registry metadata does not contain a package integrity digest.');
+          }
+          NODE
+
+          registry_args=(--registry="$REGISTRY_URL")
+          if [[ "$PACKAGE_NAME" == @*/* ]]; then
+            package_scope="${PACKAGE_NAME%%/*}"
+            registry_args+=("--${package_scope}:registry=$REGISTRY_URL")
+          fi
+
+          set +e
+          output="$(
+            npm view "$PACKAGE_NAME@$VERSION" version gitHead repository dist.integrity \
+              --json "${registry_args[@]}" 2>&1
+          )"
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            printf '%s' "$output" > "$RUNNER_TEMP/capability-registry.json"
+            if [ "$MODE" = "recover-github-release" ]; then
+              node "$RUNNER_TEMP/validate-capability-registry.cjs" \
+                "$RUNNER_TEMP/capability-registry.json"
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              echo "Verified $PACKAGE_NAME@$VERSION for GitHub Release recovery."
+              exit 0
+            fi
+            echo "::error::$PACKAGE_NAME@$VERSION already exists; npm versions are immutable."
+            exit 1
+          fi
+
+          if ! printf '%s' "$output" | grep -Eq '"code"[[:space:]]*:[[:space:]]*"E404"|(^|[[:space:]])E404([[:space:]]|$)'; then
+            echo "::error::Could not determine registry state for $PACKAGE_NAME@$VERSION: $output"
+            exit 1
+          fi
+          if [ "$MODE" = "recover-github-release" ]; then
+            echo "::error::Recovery requires the already-published package $PACKAGE_NAME@$VERSION."
+            exit 1
+          fi
+
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+          echo "$PACKAGE_NAME@$VERSION is absent and may be published."
+
+      - name: Dry run publication
+        if: ${{ steps.version.outputs.mode == 'dry-run' }}
+        env:
+          PACKAGE_NAME: ${{ steps.package.outputs.package_name }}
+          REGISTRY_URL: 'https://registry.npmjs.org'
+          TARBALL: ${{ steps.tarball.outputs.path }}
+        run: |
+          set -euo pipefail
+          registry_args=(--registry="$REGISTRY_URL")
+          if [[ "$PACKAGE_NAME" == @*/* ]]; then
+            package_scope="${PACKAGE_NAME%%/*}"
+            registry_args+=("--${package_scope}:registry=$REGISTRY_URL")
+          fi
+          npm publish --access public --ignore-scripts --dry-run \
+            "${registry_args[@]}" "$TARBALL"
+
+      - name: Publish the capability package
+        id: publish
+        if: ${{ steps.version.outputs.mode == 'normal' }}
+        env:
+          PACKAGE_NAME: ${{ steps.package.outputs.package_name }}
+          REGISTRY_URL: 'https://registry.npmjs.org'
+          TARBALL: ${{ steps.tarball.outputs.path }}
+        run: |
+          set -euo pipefail
+          registry_args=(--registry="$REGISTRY_URL")
+          if [[ "$PACKAGE_NAME" == @*/* ]]; then
+            package_scope="${PACKAGE_NAME%%/*}"
+            registry_args+=("--${package_scope}:registry=$REGISTRY_URL")
+          fi
+          npm publish --access public --ignore-scripts "${registry_args[@]}" "$TARBALL"
+
+      - name: Verify the exact public package version
+        if: ${{ steps.version.outputs.mode != 'dry-run' }}
+        env:
+          EXPECTED_COMMIT: ${{ steps.version.outputs.release_commit }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          PACKAGE_NAME: ${{ steps.package.outputs.package_name }}
+          REGISTRY_URL: 'https://registry.npmjs.org'
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          registry_args=(--registry="$REGISTRY_URL")
+          if [[ "$PACKAGE_NAME" == @*/* ]]; then
+            package_scope="${PACKAGE_NAME%%/*}"
+            registry_args+=("--${package_scope}:registry=$REGISTRY_URL")
+          fi
+
+          for attempt in $(seq 1 18); do
+            set +e
+            output="$(
+              npm view "$PACKAGE_NAME@$VERSION" version gitHead repository dist.integrity \
+                --json "${registry_args[@]}" 2>&1
+            )"
+            status=$?
+            set -e
+
+            if [ "$status" -eq 0 ]; then
+              printf '%s' "$output" > "$RUNNER_TEMP/capability-registry.json"
+              node "$RUNNER_TEMP/validate-capability-registry.cjs" \
+                "$RUNNER_TEMP/capability-registry.json"
+              echo "$PACKAGE_NAME@$VERSION is publicly resolvable with the expected metadata."
+              exit 0
+            fi
+            if ! printf '%s' "$output" | grep -Eq '"code"[[:space:]]*:[[:space:]]*"E404"|(^|[[:space:]])E404([[:space:]]|$)'; then
+              echo "::error::Registry verification failed for $PACKAGE_NAME@$VERSION: $output"
+              exit 1
+            fi
+            echo "Waiting for $PACKAGE_NAME@$VERSION registry propagation (attempt $attempt of 18)."
+            sleep 10
+          done
+
+          echo "::error::$PACKAGE_NAME@$VERSION was not publicly resolvable after 3 minutes."
+          exit 1
+
+      - name: Create the GitHub Release
+        if: ${{ steps.version.outputs.mode != 'dry-run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            echo "GitHub Release $RELEASE_TAG already exists; leaving it unchanged."
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes --title "$RELEASE_TAG"
+          fi
+
+      - name: Report post-publication recovery
+        if: ${{ failure() && steps.version.outputs.mode == 'normal' && steps.publish.outcome == 'success' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          {
+            echo "## Package published; GitHub Release not completed"
+            echo ""
+            echo "The npm version is immutable and must not be republished."
+            echo "Run the caller's **workflow_dispatch** from the default branch for version"
+            echo "\`$VERSION\` with **recover_github_release** enabled and **dry_run** disabled."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarise the release
+        if: ${{ success() }}
+        env:
+          MODE: ${{ steps.version.outputs.mode }}
+          PACKAGE_NAME: ${{ steps.package.outputs.package_name }}
+          SOURCE: ${{ steps.version.outputs.source }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          {
+            if [ "$MODE" = "dry-run" ]; then
+              echo "## Publication dry run completed"
+            elif [ "$MODE" = "recover-github-release" ]; then
+              echo "## GitHub Release recovery completed"
+            else
+              echo "## Capability release published"
+            fi
+            echo ""
+            echo "- Source: $SOURCE"
+            echo "- Package: \`$PACKAGE_NAME@$VERSION\`"
+            echo "- Mode: \`$MODE\`"
+            echo "- Authentication: npm Trusted Publishing (OIDC)"
+          } >> "$GITHUB_STEP_SUMMARY"

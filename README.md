@@ -629,6 +629,15 @@ npm package in this repository. Neither touches the network or publishes anythin
 
 ---
 
+## Capability workflows
+
+Thin TypeScript capability repositories can consume the platform's reusable CI, security, and
+single-package npm release workflows while retaining their domain-specific integration and
+deployment jobs. See [`docs/capability-workflows.md`](docs/capability-workflows.md) for the caller
+contracts, permissions, immutable-reference guidance, and Trusted Publishing constraints.
+
+---
+
 ## Releasing
 
 Make sure the intended commit is on `main`, then:
