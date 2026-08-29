@@ -1,4 +1,5 @@
 export { ApplicationLifecycle, type ApplicationState } from './state.js';
+export { type ScratchWorkspace, type ScratchWorkspaceOptions } from './scratch.js';
 export {
   defaultShutdownSignals,
   installShutdownSignalHandlers,

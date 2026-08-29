@@ -75,6 +75,14 @@ export class ToolInvoker<TServices> {
     });
   }
 
+  /** Resolves only after every admitted invocation has settled. */
+  public async waitUntilDrained(): Promise<void> {
+    if (this.active === 0) return;
+    await new Promise<void>((resolve) => {
+      this.drained.push(resolve);
+    });
+  }
+
   private releaseOne(): void {
     this.active = Math.max(0, this.active - 1);
     if (this.active > 0) return;

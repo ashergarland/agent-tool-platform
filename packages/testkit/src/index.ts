@@ -45,6 +45,11 @@ export {
   runRootBoundaryConformance,
   type RootBoundaryConformanceOptions,
 } from './root-boundary.js';
+export {
+  runScratchWorkspaceConformance,
+  type ScratchWorkspaceConformanceFixture,
+  type ScratchWorkspaceConformanceOptions,
+} from './scratch-workspace.js';
 export { runRoutingConformance, type RoutingConformanceOptions } from './routing.js';
 export {
   runTransportParity,

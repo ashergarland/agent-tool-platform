@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 import { RootBoundary, assertRelativeInput, extensionOf } from '@agent-tool-platform/runtime';
+import { assertSameFileIdentity } from '../packages/runtime/src/fs/root-boundary.js';
 
 interface Tree {
   readonly base: string;
@@ -23,10 +25,20 @@ const buildTree = async (): Promise<Tree> => {
   let symlinkSupported = true;
   try {
     await symlink(join(outside, 'secret.txt'), join(root, 'escape.txt'));
+    await symlink(join(root, 'inside.txt'), join(root, 'inside-link.txt'));
   } catch {
     symlinkSupported = false;
   }
   return { base, root, outside, symlinkSupported };
+};
+
+const consume = async (stream: Readable): Promise<Buffer> => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    if (!Buffer.isBuffer(chunk)) throw new Error('Expected a buffer stream');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
 };
 
 describe('path helpers', () => {
@@ -64,6 +76,9 @@ describe('RootBoundary', () => {
     try {
       const boundary = new RootBoundary({ root: tree.root });
       await expect(boundary.resolve('../outside/secret.txt')).rejects.toMatchObject({
+        code: 'forbidden',
+      });
+      await expect(boundary.openFile('../outside/secret.txt')).rejects.toMatchObject({
         code: 'forbidden',
       });
       await expect(boundary.resolve(join(tree.outside, 'secret.txt'))).rejects.toMatchObject({
@@ -128,9 +143,130 @@ describe('RootBoundary', () => {
       const read = await boundary.readFile(resolved);
       expect(read.text).toBe('inside contents');
       expect(read.bytes).toBe(15);
+      await expect(boundary.readFile('inside.txt')).resolves.toEqual(read);
 
       const tiny = new RootBoundary({ root: tree.root, maxFileBytes: 2 });
       await expect(tiny.readFile(resolved)).rejects.toMatchObject({ code: 'limit_exceeded' });
+    } finally {
+      await rm(tree.base, { recursive: true, force: true });
+    }
+  });
+
+  it('opens metadata, a bounded preview, and a full descriptor-backed stream', async () => {
+    const tree = await buildTree();
+    try {
+      const contents = Buffer.from('0123456789'.repeat(10_000));
+      await writeFile(join(tree.root, 'large.txt'), contents);
+      const opened = await new RootBoundary({ root: tree.root }).openFile('large.txt', {
+        previewBytes: 13,
+      });
+
+      expect(opened.relativePath).toBe('large.txt');
+      expect(opened.sizeBytes).toBe(contents.byteLength);
+      expect(opened.preview).toEqual(contents.subarray(0, 13));
+      expect(opened.preview.byteLength).toBeLessThan(opened.sizeBytes);
+      await expect(consume(opened.createReadStream({ highWaterMark: 257 }))).resolves.toEqual(
+        contents,
+      );
+
+      await Promise.all([opened.close(), opened.close()]);
+      await expect(opened.close()).resolves.toBeUndefined();
+      expect(() => opened.createReadStream()).toThrow(/closed/u);
+    } finally {
+      await rm(tree.base, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps preview and stream attached to the opened object after its path is replaced', async () => {
+    const tree = await buildTree();
+    try {
+      const original = Buffer.from('original descriptor contents');
+      const path = join(tree.root, 'changing.txt');
+      await writeFile(path, original);
+      const opened = await new RootBoundary({ root: tree.root }).openFile('changing.txt', {
+        previewBytes: 8,
+      });
+
+      await rename(path, join(tree.root, 'moved.txt'));
+      await writeFile(path, 'replacement');
+
+      expect(opened.preview).toEqual(original.subarray(0, 8));
+      await expect(consume(opened.createReadStream())).resolves.toEqual(original);
+      await opened.close();
+    } finally {
+      await rm(tree.base, { recursive: true, force: true });
+    }
+  });
+
+  it('enforces descriptor size and regular-file requirements when opening', async () => {
+    const tree = await buildTree();
+    try {
+      const boundary = new RootBoundary({ root: tree.root, maxFileBytes: 15 });
+      const accepted = await boundary.openFile('inside.txt', { previewBytes: 4 });
+      expect(accepted).toMatchObject({ sizeBytes: 15 });
+      await accepted.close();
+
+      await appendFile(join(tree.root, 'inside.txt'), '!');
+      await expect(boundary.openFile('inside.txt')).rejects.toMatchObject({
+        code: 'limit_exceeded',
+      });
+      await expect(boundary.openFile('nested')).rejects.toMatchObject({ code: 'bad_request' });
+    } finally {
+      await rm(tree.base, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects final symlinks and symlink escapes when opening', async () => {
+    const tree = await buildTree();
+    try {
+      if (!tree.symlinkSupported) return;
+      const boundary = new RootBoundary({ root: tree.root });
+      await expect(boundary.openFile('inside-link.txt')).rejects.toMatchObject({
+        code: 'forbidden',
+      });
+      await expect(boundary.openFile('escape.txt')).rejects.toMatchObject({ code: 'forbidden' });
+    } finally {
+      await rm(tree.base, { recursive: true, force: true });
+    }
+  });
+
+  it('streams an empty opened file and validates preview bounds', async () => {
+    const tree = await buildTree();
+    try {
+      await writeFile(join(tree.root, 'empty.txt'), '');
+      const boundary = new RootBoundary({ root: tree.root });
+      const opened = await boundary.openFile('empty.txt');
+      expect(opened.sizeBytes).toBe(0);
+      expect(opened.preview).toEqual(Buffer.alloc(0));
+      await expect(consume(opened.createReadStream())).resolves.toEqual(Buffer.alloc(0));
+      await opened.close();
+
+      await expect(boundary.openFile('empty.txt', { previewBytes: -1 })).rejects.toMatchObject({
+        code: 'bad_request',
+      });
+    } finally {
+      await rm(tree.base, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the confined handle usable after a stream is cancelled', async () => {
+    const tree = await buildTree();
+    try {
+      const contents = Buffer.from('cancel-safe-stream'.repeat(1000));
+      await writeFile(join(tree.root, 'cancel.txt'), contents);
+      const opened = await new RootBoundary({ root: tree.root }).openFile('cancel.txt');
+      const controller = new AbortController();
+      const cancelled = opened.createReadStream({
+        highWaterMark: 16,
+        signal: controller.signal,
+      });
+      cancelled.once('data', () => controller.abort());
+
+      await expect(consume(cancelled)).rejects.toMatchObject({ name: 'AbortError' });
+      await expect(consume(opened.createReadStream({ highWaterMark: 31 }))).resolves.toEqual(
+        contents,
+      );
+      await opened.close();
     } finally {
       await rm(tree.base, { recursive: true, force: true });
     }
@@ -143,6 +279,7 @@ describe('RootBoundary', () => {
         usable: true,
         configured: true,
       });
+
       expect(await new RootBoundary({ root: undefined }).status()).toMatchObject({
         usable: false,
         configured: false,
@@ -166,6 +303,20 @@ describe('RootBoundary', () => {
     });
   });
 
+  describe('opened file identity', () => {
+    it('accepts matching identities and fails closed for changes or unsupported metadata', () => {
+      expect(() =>
+        assertSameFileIdentity({ dev: 1n, ino: 2n }, { dev: 1n, ino: 2n }),
+      ).not.toThrow();
+      expect(() => assertSameFileIdentity({ dev: 1n, ino: 2n }, { dev: 1n, ino: 3n })).toThrow(
+        /changed/u,
+      );
+      expect(() => assertSameFileIdentity({ dev: 1n, ino: 0n }, { dev: 1n, ino: 0n })).toThrow(
+        /cannot be verified/u,
+      );
+    });
+  });
+
   it('answers containment questions without throwing', async () => {
     const tree = await buildTree();
     try {
@@ -174,6 +325,9 @@ describe('RootBoundary', () => {
       expect(boundary.isWithin(tree.root, join(tree.outside, 'secret.txt'))).toBe(false);
       expect(boundary.isWithin(tree.root, tree.root)).toBe(false);
       expect(boundary.isWithin(tree.root, tree.root, true)).toBe(true);
+      if (process.platform === 'win32') {
+        expect(boundary.isWithin(tree.root, join(tree.base, 'ROOT', 'secret.txt'))).toBe(false);
+      }
     } finally {
       await rm(tree.base, { recursive: true, force: true });
     }

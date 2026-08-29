@@ -96,6 +96,7 @@ const documentedExports = {
       'runRoutingConformance',
       'runLifecycleConformance',
       'runRootBoundaryConformance',
+      'runScratchWorkspaceConformance',
       'runProcessConformance',
       'runMetadataConformance',
     ],

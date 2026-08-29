@@ -12,9 +12,17 @@ import {
   runRegistryConformance,
   runRootBoundaryConformance,
   runRoutingConformance,
+  runScratchWorkspaceConformance,
   runTransportParity,
+  createTestPlatformConfig,
   generateTestApiKey,
 } from '@agent-tool-platform/testkit';
+import {
+  createAgentToolApplication,
+  createSilentLogger,
+  defineAgentToolCapability,
+  type ScratchWorkspace,
+} from '@agent-tool-platform/runtime';
 import {
   minimalConfig,
   minimalInstructions,
@@ -161,6 +169,36 @@ describe('testkit conformance suites', () => {
     const result = await runRootBoundaryConformance();
     expect(result.failures).toEqual([]);
   }, 30_000);
+
+  it('scratch workspace conformance', async () => {
+    interface Services {
+      readonly workspace: ScratchWorkspace;
+    }
+
+    const capability = defineAgentToolCapability<Services>({
+      manifest: {
+        name: 'scratch-conformance',
+        version: '0.0.0-test',
+        title: 'Scratch Conformance',
+        description: 'Exercises platform scratch workspace ownership.',
+      },
+      instructions: 'Test fixture.',
+      tools: [],
+      createServices: async (context) => ({
+        workspace: await context.createScratchWorkspace({ prefix: 'conformance-' }),
+      }),
+    });
+    const result = await runScratchWorkspaceConformance({
+      createApplication: async () => {
+        const application = await createAgentToolApplication(capability, {
+          config: createTestPlatformConfig({ serviceName: 'scratch-conformance' }),
+          logger: createSilentLogger(),
+        });
+        return { application, workspace: application.services.workspace };
+      },
+    });
+    expect(result.failures).toEqual([]);
+  });
 
   it('process conformance', async () => {
     const result = await runProcessConformance();
