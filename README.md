@@ -485,6 +485,12 @@ in a deliberate order:
    deferred until the tracked work exits rather than deleting a directory underneath it.
 5. **Close the listener.**
 
+A fully drained shutdown resolves only after scratch cleanup. A bounded shutdown with admitted work
+still active rejects as incomplete after scheduling best-effort cleanup; if an in-process caller
+keeps the process alive, cleanup runs when that work later settles. Signal-driven shutdown maps that
+rejection to a non-zero exit instead of terminating with a false clean result. It never extends the
+drain indefinitely and never deletes the workspace underneath the active handler.
+
 Steps 1 and 3 together are the point. Waiting alone is not enough: request tracking only protects
 work that is _already_ in flight, so without the admission guard a request arriving after the
 tracker reaches zero would begin against services that teardown is about to destroy. Admission has
@@ -494,8 +500,9 @@ The core operational endpoints — `/health`, `/ready`, `/version`, `/openapi.js
 throughout, so an orchestrator can still observe a draining replica. `/ready` reports `503` with a
 `draining` check while teardown runs.
 
-When `startAgentToolApplication` installs signal handlers, a clean shutdown exits `0` and a failed
-or timed-out shutdown exits non-zero, so an orchestrator can tell the difference.
+When `startAgentToolApplication` installs signal handlers, a fully drained and cleaned shutdown
+exits `0`; a failed, timed-out, or cleanup-deferred shutdown exits non-zero, so an orchestrator can
+tell the difference.
 `startStdioAgentToolApplication` uses the same handler — one signal sequence, one set of exit-code
 semantics — and differs only in what teardown means: it drains the application, runs the capability
 `stop` hook, and closes the MCP server last, exactly where HTTP closes its listener.

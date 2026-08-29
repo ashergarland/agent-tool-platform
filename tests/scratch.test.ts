@@ -3,11 +3,13 @@ import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/p
 import { request as httpRequest, type ClientRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   createAgentToolApplication,
   createSilentLogger,
   defineAgentToolCapability,
+  installShutdownSignalHandlers,
   startAgentToolApplication,
   type AgentToolApplication,
   type CapabilityContext,
@@ -259,7 +261,7 @@ describe('lifecycle-owned scratch workspaces', () => {
 
     const request = application.http.inject({ method: 'GET', url: '/scratch/use' });
     await routeEntered;
-    await application.shutdown();
+    await expect(application.shutdown()).rejects.toThrow(/shutdown is incomplete/u);
     expect(await exists(path)).toBe(true);
 
     release();
@@ -332,13 +334,67 @@ describe('lifecycle-owned scratch workspaces', () => {
     client.destroy();
     await clientClosed;
     const shutdown = application.shutdown();
+    const incompleteShutdown = expect(shutdown).rejects.toThrow(/shutdown is incomplete/u);
     await new Promise((resolve) => setTimeout(resolve, 75));
     expect(await exists(application.services.workspace.path)).toBe(true);
 
     release();
     await routeSettled;
-    await shutdown;
+    await incompleteShutdown;
     expect(handlerError).toBeUndefined();
     await waitUntilRemoved(application.services.workspace.path);
+  });
+
+  it('reports signal-driven shutdown as incomplete while scratch cleanup is deferred', async () => {
+    let entered!: () => void;
+    const routeEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const routeRelease = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const application = await createApplication(
+      {
+        publicRoutes: [
+          (router, { services }) => {
+            router.get('/scratch/signal', async () => {
+              entered();
+              await routeRelease;
+              await writeFile(join(services.workspace.path, 'signal.txt'), 'done', 'utf8');
+              return { used: true };
+            });
+          },
+        ],
+      },
+      25,
+    );
+    await application.start();
+    const path = application.services.workspace.path;
+    const request = application.http.inject({ method: 'GET', url: '/scratch/signal' });
+    await routeEntered;
+
+    const target = new EventEmitter();
+    const exits: number[] = [];
+    installShutdownSignalHandlers({
+      logger: createSilentLogger(),
+      graceMs: 25,
+      target,
+      exit: (code) => exits.push(code),
+      shutdown: () => application.shutdown(),
+    });
+    target.emit('SIGTERM');
+
+    const deadline = Date.now() + 2000;
+    while (exits.length === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(exits).toEqual([1]);
+    expect(application.lifecycle.state).toBe('stopped');
+    expect(await exists(path)).toBe(true);
+
+    release();
+    expect((await request).statusCode).toBe(200);
+    await waitUntilRemoved(path);
   });
 });

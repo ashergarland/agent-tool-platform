@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, open, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -57,7 +57,8 @@ export const runRootBoundaryConformance = async (
     try {
       await symlink(join(outside, 'secret.txt'), join(root, 'escape.txt'));
       await symlink(join(root, 'inside.txt'), join(root, 'inside-link.txt'));
-    } catch {
+    } catch (error) {
+      if (process.env.ATP_SYMLINK_TESTS_REQUIRED === '1') throw error;
       // Unprivileged Windows sessions cannot create symlinks; the check is reported as skipped.
       symlinkSupported = false;
     }
@@ -172,6 +173,20 @@ export const runRootBoundaryConformance = async (
     }
 
     if (process.platform === 'win32') {
+      const identityHandle = await open(join(root, 'inside.txt'), 'r');
+      try {
+        const descriptorIdentity = await identityHandle.stat({ bigint: true });
+        const pathIdentity = await lstat(join(root, 'inside.txt'), { bigint: true });
+        run.check(
+          'Windows provides usable non-zero descriptor/path identity',
+          descriptorIdentity.dev !== 0n &&
+            descriptorIdentity.ino !== 0n &&
+            descriptorIdentity.dev === pathIdentity.dev &&
+            descriptorIdentity.ino === pathIdentity.ino,
+        );
+      } finally {
+        await identityHandle.close();
+      }
       run.check(
         'Windows uses post-open path and descriptor identity checks',
         typeof constants.O_NOFOLLOW !== 'number',

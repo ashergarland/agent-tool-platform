@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { appendFile, mkdir, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -26,7 +36,11 @@ const buildTree = async (): Promise<Tree> => {
   try {
     await symlink(join(outside, 'secret.txt'), join(root, 'escape.txt'));
     await symlink(join(root, 'inside.txt'), join(root, 'inside-link.txt'));
-  } catch {
+  } catch (error) {
+    if (process.env.ATP_SYMLINK_TESTS_REQUIRED === '1') {
+      await rm(base, { recursive: true, force: true });
+      throw error;
+    }
     symlinkSupported = false;
   }
   return { base, root, outside, symlinkSupported };
@@ -327,9 +341,37 @@ describe('RootBoundary', () => {
       expect(boundary.isWithin(tree.root, tree.root, true)).toBe(true);
       if (process.platform === 'win32') {
         expect(boundary.isWithin(tree.root, join(tree.base, 'ROOT', 'secret.txt'))).toBe(false);
+        await expect(boundary.openFile('../ROOT/inside.txt')).rejects.toMatchObject({
+          code: 'forbidden',
+        });
       }
     } finally {
       await rm(tree.base, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform === 'win32')(
+    'uses non-zero matching Windows descriptor and path identity',
+    async () => {
+      const tree = await buildTree();
+      const path = join(tree.root, 'inside.txt');
+      const handle = await open(path, 'r');
+      try {
+        const descriptor = await handle.stat({ bigint: true });
+        const addressed = await lstat(path, { bigint: true });
+        expect(descriptor.dev).not.toBe(0n);
+        expect(descriptor.ino).not.toBe(0n);
+        expect(addressed.dev).toBe(descriptor.dev);
+        expect(addressed.ino).toBe(descriptor.ino);
+
+        // A successful RootBoundary open proves the same identity passed its internal fail-closed
+        // descriptor/path checks before the handle was returned.
+        const confined = await new RootBoundary({ root: tree.root }).openFile('inside.txt');
+        await confined.close();
+      } finally {
+        await handle.close();
+        await rm(tree.base, { recursive: true, force: true });
+      }
+    },
+  );
 });

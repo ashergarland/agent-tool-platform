@@ -107,15 +107,21 @@ concurrent-safe, and idempotent. Successful manual disposal removes the workspac
 ownership. Otherwise the runtime attempts every remaining cleanup:
 
 - if service construction, a capability start hook, or listener/transport startup fails;
-- during normal shutdown, after admitted tool and custom-route work has drained and after the
-  capability `stop` hook;
+- during fully drained shutdown, after admitted tool and custom-route work and the capability
+  `stop` hook;
 - after a timed-out drain eventually becomes idle, without deleting a directory that an admitted
   handler may still be using.
 
-Cleanup failures do not skip later workspaces. Synchronous shutdown surfaces them; cleanup deferred
-because a handler exceeded the drain budget is logged. On POSIX, the directory is created with and
-reasserted to mode `0700`. Node's POSIX mode bits do not describe Windows ACLs, so Windows guarantees
-atomic unique-directory creation and lifecycle cleanup, not a claimed `0700` ACL equivalent.
+A fully drained `shutdown()` resolves only after owned cleanup finishes. If admitted work exceeds
+the bounded drain budget, `shutdown()` rejects as incomplete while best-effort cleanup waits for
+that work to settle. Signal-driven startup helpers therefore exit non-zero rather than claiming a
+clean teardown; an in-process caller that keeps the process alive still gets deferred cleanup.
+Cleanup failures do not skip later workspaces. Synchronous failures are surfaced; failures from
+necessarily deferred cleanup are logged.
+
+On POSIX, the directory is created with and reasserted to mode `0700`. Node's POSIX mode bits do not
+describe Windows ACLs, so Windows guarantees atomic unique-directory creation and lifecycle
+cleanup, not a claimed `0700` ACL equivalent.
 
 Lifecycle ownership covers work the runtime admits and tracks. A capability that starts an
 untracked background process must stop and await it itself; the platform cannot know that process

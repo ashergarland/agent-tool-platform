@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { access, rm } from 'node:fs/promises';
 import { PassThrough, type Readable, type Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -14,6 +15,7 @@ import {
   loadCapabilityConfig,
   startAgentToolApplication,
   startStdioAgentToolApplication,
+  type ScratchWorkspace,
   type StdioApplication,
 } from '@agent-tool-platform/runtime';
 import minimalCapability, {
@@ -501,6 +503,76 @@ describe('stdio shutdown', () => {
     expect(counts.stops).toBe(1);
     // A startup that never completed must not have left signal handlers attached either.
     expect(signalListeners('SIGINT')).toHaveLength(beforeInt.length);
+  }, 30_000);
+
+  it('cleans scratch after stdio connection failure without hiding the primary error', async () => {
+    interface ScratchProbeServices {
+      readonly cleaned: ScratchWorkspace;
+      readonly cleanupFailure: ScratchWorkspace;
+    }
+
+    const transportFailure = new Error('stdio transport start failed');
+    const cleanupFailure = new Error('scratch cleanup failed');
+    let cleanedPath: string | undefined;
+    let cleanupFailurePath: string | undefined;
+    const capability = defineAgentToolCapability<ScratchProbeServices>({
+      manifest: {
+        name: 'stdio-scratch-probe',
+        version: '0.0.0-test',
+        title: 'Stdio Scratch Probe',
+        description: 'Exercises scratch rollback after stdio transport startup failure.',
+      },
+      instructions: 'Test fixture.',
+      tools: [],
+      async createServices(context) {
+        const cleaned = await context.createScratchWorkspace({ prefix: 'stdio-cleaned-' });
+        const failing = await context.createScratchWorkspace({ prefix: 'stdio-failing-' });
+        cleanedPath = cleaned.path;
+        cleanupFailurePath = failing.path;
+        Object.defineProperty(failing, 'dispose', {
+          value: async (): Promise<void> => {
+            throw cleanupFailure;
+          },
+        });
+        return { cleaned, cleanupFailure: failing };
+      },
+    });
+    const stdin = new PassThrough();
+    const on = vi.spyOn(stdin, 'on').mockImplementationOnce(() => {
+      throw transportFailure;
+    });
+
+    let rejection: unknown;
+    try {
+      await startStdioAgentToolApplication<ScratchProbeServices>(capability, {
+        env: { NODE_ENV: 'test' },
+        handleSignals: false,
+        stdin,
+        stdout: new PassThrough(),
+      });
+    } catch (error) {
+      rejection = error;
+    } finally {
+      on.mockRestore();
+    }
+
+    try {
+      expect(rejection).toBeInstanceOf(AggregateError);
+      if (!(rejection instanceof AggregateError)) {
+        throw new Error('Expected aggregate startup error');
+      }
+      expect(rejection.cause).toBe(transportFailure);
+      expect(rejection.errors).toEqual([transportFailure, cleanupFailure]);
+      if (cleanedPath === undefined || cleanupFailurePath === undefined) {
+        throw new Error('Expected scratch workspace paths');
+      }
+      await expect(access(cleanedPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(access(cleanupFailurePath)).resolves.toBeUndefined();
+    } finally {
+      if (cleanupFailurePath !== undefined) {
+        await rm(cleanupFailurePath, { recursive: true, force: true });
+      }
+    }
   }, 30_000);
 
   it('rolls back and reports the original error when the capability start hook throws', async () => {

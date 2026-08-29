@@ -47,7 +47,10 @@ export interface AgentToolApplication<TConfig extends PlatformConfig, TServices>
   readiness(): Promise<ReadinessReport>;
   /** Runs capability `start` hooks and marks the application ready. */
   start(): Promise<void>;
-  /** Drains, runs capability `stop` hooks, then closes the HTTP listener. */
+  /**
+   * Drains, runs capability `stop` hooks, cleans lifecycle resources, then closes HTTP. Rejects
+   * when admitted work exceeds the drain budget and resource cleanup must continue asynchronously.
+   */
   shutdown(): Promise<void>;
 }
 
@@ -269,8 +272,16 @@ export const createAgentToolApplication = async <
       errors.push(...(await scratchWorkspaces.disposeAll()));
     } else {
       // A handler that exceeded the drain budget must not lose a workspace it is still using.
-      // Preserve bounded shutdown by cleaning asynchronously as soon as every admitted call exits.
+      // Preserve bounded shutdown by cleaning asynchronously as soon as every admitted call exits,
+      // but reject this shutdown attempt so signal handling cannot report incomplete teardown as
+      // clean.
       deferScratchCleanupUntilIdle();
+      errors.push(
+        new Error(
+          'Application shutdown is incomplete because admitted work exceeded the drain budget; ' +
+            'lifecycle resource cleanup remains deferred',
+        ),
+      );
     }
 
     try {
