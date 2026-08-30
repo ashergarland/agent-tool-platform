@@ -131,6 +131,7 @@ export const createHttpServer = <TConfig extends PlatformConfig, TServices>(
     loggerInstance: logger,
     genReqId: (request) => resolveRequestId(request.headers['x-request-id']),
     requestIdHeader: false,
+    forceCloseConnections: true,
     bodyLimit: config.http.bodyLimit,
     trustProxy: config.http.trustProxy,
   });
