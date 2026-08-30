@@ -111,6 +111,14 @@ export class RequestTracker {
       this.waiters.push(() => finish(true));
     });
   }
+
+  /** Resolves only after every admitted HTTP request has settled. */
+  public async waitUntilDrained(): Promise<void> {
+    if (this.active === 0) return;
+    await new Promise<void>((resolve) => {
+      this.waiters.push(resolve);
+    });
+  }
 }
 
 export const createHttpServer = <TConfig extends PlatformConfig, TServices>(
@@ -174,6 +182,21 @@ export const createHttpServer = <TConfig extends PlatformConfig, TServices>(
     app.addHook('onResponse', (request, _reply, done) => {
       (request as FastifyRequest & { releaseTracked?: () => void }).releaseTracked?.();
       done();
+    });
+
+    // The admission lease above closes the guard-to-handler race, but a disconnected socket may
+    // release it while an async route handler is still running. A second lease follows the handler
+    // promise itself so teardown cannot destroy capability resources before that code settles.
+    app.addHook('onRoute', (routeOptions) => {
+      const handler = routeOptions.handler;
+      routeOptions.handler = async function trackedHandler(request, reply) {
+        const release = tracker.enter();
+        try {
+          return await handler.call(this, request, reply);
+        } finally {
+          release();
+        }
+      };
     });
   }
 

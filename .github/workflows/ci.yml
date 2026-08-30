@@ -67,6 +67,31 @@ jobs:
           name: coverage
           path: coverage/lcov.info
 
+  windows-runtime:
+    name: Windows confined files and scratch
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Typecheck Windows runtime surfaces
+        run: npm run typecheck
+
+      - name: Report Windows symlink capability
+        shell: pwsh
+        run: |
+          node -e "const fs=require('node:fs/promises'),os=require('node:os'),p=require('node:path');(async()=>{const base=await fs.mkdtemp(p.join(os.tmpdir(),'atp-symlink-probe-'));try{const target=p.join(base,'target.txt');await fs.writeFile(target,'x');await fs.symlink(target,p.join(base,'link.txt'));await fs.appendFile(process.env.GITHUB_ENV,'ATP_SYMLINK_TESTS_REQUIRED=1'+os.EOL);console.log('Windows final-symlink tests: enabled and required');}catch(error){if(error.code!=='EPERM'&&error.code!=='EACCES')throw error;console.log('Windows final-symlink tests: skipped; symlink privilege unavailable ('+error.code+')');}finally{await fs.rm(base,{recursive:true,force:true});}})().catch(error=>{console.error(error);process.exit(1);})"
+
+      - name: Test Windows RootBoundary and scratch lifecycle
+        run: npx vitest run tests/fs.test.ts tests/scratch.test.ts
+
+      - name: Test Windows filesystem conformance
+        run: npx vitest run tests/conformance.test.ts -t "root boundary conformance|scratch workspace conformance"
+
   bicep:
     name: Bicep build and lint
     runs-on: ubuntu-latest

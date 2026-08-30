@@ -1,6 +1,8 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdtemp, mkdir, open, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 import { RootBoundary } from '@agent-tool-platform/runtime';
 import {
   ConformanceRun,
@@ -25,6 +27,15 @@ export interface RootBoundaryConformanceOptions extends ConformanceOptions {
   readonly createBoundary?: (root: string) => RootBoundary;
 }
 
+const consume = async (stream: Readable): Promise<Buffer> => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    if (!Buffer.isBuffer(chunk)) throw new Error('Expected RootBoundary to emit buffer chunks');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+};
+
 export const runRootBoundaryConformance = async (
   options: RootBoundaryConformanceOptions = {},
 ): Promise<ConformanceResult> => {
@@ -38,12 +49,16 @@ export const runRootBoundaryConformance = async (
     await mkdir(outside, { recursive: true });
     await writeFile(join(root, 'inside.txt'), 'inside', 'utf8');
     await writeFile(join(root, 'nested', 'deep.txt'), 'deep', 'utf8');
+    const largeContents = Buffer.from('0123456789'.repeat(10_000));
+    await writeFile(join(root, 'large.txt'), largeContents);
     await writeFile(join(outside, 'secret.txt'), 'secret', 'utf8');
 
     let symlinkSupported = true;
     try {
       await symlink(join(outside, 'secret.txt'), join(root, 'escape.txt'));
-    } catch {
+      await symlink(join(root, 'inside.txt'), join(root, 'inside-link.txt'));
+    } catch (error) {
+      if (process.env.ATP_SYMLINK_TESTS_REQUIRED === '1') throw error;
       // Unprivileged Windows sessions cannot create symlinks; the check is reported as skipped.
       symlinkSupported = false;
     }
@@ -60,10 +75,59 @@ export const runRootBoundaryConformance = async (
       'nested/deep.txt',
     );
 
+    const opened = await boundary.openFile('large.txt', { previewBytes: 11 });
+    run.equal(
+      'opened metadata reports descriptor size',
+      opened.sizeBytes,
+      largeContents.byteLength,
+    );
+    run.equal('opened metadata reports a root-relative path', opened.relativePath, 'large.txt');
+    run.check(
+      'the opened preview is bounded',
+      opened.preview.equals(largeContents.subarray(0, 11)) &&
+        opened.preview.byteLength < opened.sizeBytes,
+    );
+    run.check(
+      'a file larger than its preview streams in full',
+      (await consume(opened.createReadStream({ highWaterMark: 257 }))).equals(largeContents),
+    );
+    await Promise.all([opened.close(), opened.close()]);
+
+    const changingPath = join(root, 'changing.txt');
+    const changingContents = Buffer.from('opened-object-contents');
+    await writeFile(changingPath, changingContents);
+    const changing = await boundary.openFile('changing.txt', { previewBytes: 6 });
+    await rename(changingPath, join(root, 'moved.txt'));
+    await writeFile(changingPath, 'replacement');
+    run.check(
+      'preview and stream stay on the same opened object after path replacement',
+      changing.preview.equals(changingContents.subarray(0, 6)) &&
+        (await consume(changing.createReadStream())).equals(changingContents),
+    );
+    await changing.close();
+    await changing.close();
+
+    const limited = new RootBoundary({ root, maxFileBytes: 5 });
+    await run.throws(
+      'opened descriptor size is enforced',
+      () => limited.openFile('inside.txt'),
+      (error) => hasErrorCode(error, 'limit_exceeded'),
+    );
+    await run.throws(
+      'opened objects must be regular files',
+      () => boundary.openFile('nested'),
+      (error) => hasErrorCode(error, 'bad_request'),
+    );
+
     await run.throws(
       'traversal outside the root is denied',
       () => boundary.resolve('../outside/secret.txt'),
       (error) => hasErrorCode(error, 'forbidden') || hasErrorCode(error, 'not_found'),
+    );
+    await run.throws(
+      'traversal outside the root is denied before opening',
+      () => boundary.openFile('../outside/secret.txt'),
+      (error) => hasErrorCode(error, 'forbidden'),
     );
 
     await run.throws(
@@ -84,11 +148,58 @@ export const runRootBoundaryConformance = async (
         () => boundary.resolve('escape.txt'),
         (error) => hasErrorCode(error, 'forbidden'),
       );
+      await run.throws(
+        'a final in-root symlink is rejected when opening',
+        () => boundary.openFile('inside-link.txt'),
+        (error) => hasErrorCode(error, 'forbidden'),
+      );
+      await run.throws(
+        'a symlink escape is rejected when opening',
+        () => boundary.openFile('escape.txt'),
+        (error) => hasErrorCode(error, 'forbidden'),
+      );
     } else {
       run.check(
         'a symlink whose target escapes the root is denied',
         true,
         'skipped: symlinks unavailable',
+      );
+      run.check(
+        'a final in-root symlink is rejected when opening',
+        true,
+        'skipped: symlinks unavailable',
+      );
+      run.check('a symlink escape is rejected when opening', true, 'skipped: symlinks unavailable');
+    }
+
+    if (process.platform === 'win32') {
+      const identityHandle = await open(join(root, 'inside.txt'), 'r');
+      try {
+        const descriptorIdentity = await identityHandle.stat({ bigint: true });
+        const pathIdentity = await lstat(join(root, 'inside.txt'), { bigint: true });
+        run.check(
+          'Windows provides usable non-zero descriptor/path identity',
+          descriptorIdentity.dev !== 0n &&
+            descriptorIdentity.ino !== 0n &&
+            descriptorIdentity.dev === pathIdentity.dev &&
+            descriptorIdentity.ino === pathIdentity.ino,
+        );
+      } finally {
+        await identityHandle.close();
+      }
+      run.check(
+        'Windows uses post-open path and descriptor identity checks',
+        typeof constants.O_NOFOLLOW !== 'number',
+        'Node does not expose O_NOFOLLOW on Windows',
+      );
+      run.check(
+        'Windows does not collapse case-distinct canonical siblings',
+        !boundary.isWithin(root, join(base, 'ROOT', 'secret.txt')),
+      );
+    } else {
+      run.check(
+        'POSIX provides atomic final-component no-follow',
+        typeof constants.O_NOFOLLOW === 'number',
       );
     }
 

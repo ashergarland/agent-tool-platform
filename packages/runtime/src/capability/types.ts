@@ -3,6 +3,7 @@ import type { PlatformConfig } from '../config/platform.js';
 import type { AnyCapabilityConfigSpec } from '../config/capability.js';
 import type { HttpRouter } from '../http/types.js';
 import type { ApplicationLifecycle, ReadinessResult } from '../lifecycle/index.js';
+import type { ScratchWorkspace, ScratchWorkspaceOptions } from '../lifecycle/scratch.js';
 import type { CapabilityTelemetryEstimator, TelemetrySink } from '../telemetry/types.js';
 import type { AnyToolDefinition } from '../tools/types.js';
 
@@ -32,6 +33,11 @@ export interface CapabilityContext<TConfig extends PlatformConfig> {
   readonly logger: Logger;
   readonly lifecycle: ApplicationLifecycle;
   readonly telemetry: TelemetrySink;
+  /**
+   * Creates a private temporary directory owned by the application lifecycle. Manual disposal
+   * transfers it out of lifecycle ownership after removal succeeds.
+   */
+  readonly createScratchWorkspace: (options?: ScratchWorkspaceOptions) => Promise<ScratchWorkspace>;
 }
 
 /** What a capability sees once its services exist. */

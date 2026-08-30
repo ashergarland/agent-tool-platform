@@ -4,6 +4,7 @@ import type { Readable, Writable } from 'node:stream';
 import type { PlatformConfig } from '../config/platform.js';
 import { installShutdownSignalHandlers } from '../lifecycle/signals.js';
 import { createSilentLogger } from '../logging/logger.js';
+import { combineErrors } from '../lifecycle/failures.js';
 import { connectStdio } from '../mcp/stdio.js';
 import {
   createAgentToolApplication,
@@ -115,8 +116,9 @@ export const startStdioAgentToolApplication = async <
    * stream handlers *before* starting it, so a half-connected server still holds listeners. Nothing
    * else will ever tear those down, because a failure here rejects without returning a `close()`.
    *
-   * Rollback failures are swallowed on purpose: the caller must see why startup failed, not why the
-   * cleanup that followed it also did. `server.close()` closes the transport it adopted.
+   * The startup failure remains primary, while rollback failures are attached in an AggregateError
+   * so failed scratch or transport cleanup is never silent. `server.close()` closes the transport
+   * it adopted.
    */
   const started = await (async (): Promise<{
     server: Server;
@@ -132,9 +134,18 @@ export const startStdioAgentToolApplication = async <
       });
       return { server, transport };
     } catch (error) {
-      await server?.close().catch(() => undefined);
-      await application.shutdown().catch(() => undefined);
-      throw error;
+      const cleanupErrors: unknown[] = [];
+      try {
+        await server?.close();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      try {
+        await application.shutdown();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      throw combineErrors(error, cleanupErrors, 'Stdio startup and rollback failed');
     }
   })();
   const { server, transport } = started;

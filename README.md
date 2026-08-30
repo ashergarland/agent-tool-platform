@@ -477,9 +477,19 @@ in a deliberate order:
    invocations _and_ in-flight HTTP requests, so this waits for actual work rather than for a fixed
    delay. A handler that ignores its cancellation signal cannot hold the process open: the wait
    times out, logs a warning, and proceeds.
-3. **Run the capability `stop` hook.** Only now, so a handler is never torn out from under a call
-   still using the domain resources it is about to destroy.
-4. **Close the listener.**
+3. **Run the capability `stop` hook.** This follows the bounded drain. Cooperative work has exited;
+   a handler that exceeded the grace period remains a capability defect and cannot keep ordinary
+   shutdown open.
+4. **Clean lifecycle-owned scratch workspaces.** Cleanup runs after the stop hook only when admitted
+   tools and custom routes are actually idle. If the bounded drain timed out, scratch cleanup is
+   deferred until the tracked work exits rather than deleting a directory underneath it.
+5. **Close the listener.**
+
+A fully drained shutdown resolves only after scratch cleanup. A bounded shutdown with admitted work
+still active rejects as incomplete after scheduling best-effort cleanup; if an in-process caller
+keeps the process alive, cleanup runs when that work later settles. Signal-driven shutdown maps that
+rejection to a non-zero exit instead of terminating with a false clean result. It never extends the
+drain indefinitely and never deletes the workspace underneath the active handler.
 
 Steps 1 and 3 together are the point. Waiting alone is not enough: request tracking only protects
 work that is _already_ in flight, so without the admission guard a request arriving after the
@@ -490,8 +500,9 @@ The core operational endpoints — `/health`, `/ready`, `/version`, `/openapi.js
 throughout, so an orchestrator can still observe a draining replica. `/ready` reports `503` with a
 `draining` check while teardown runs.
 
-When `startAgentToolApplication` installs signal handlers, a clean shutdown exits `0` and a failed
-or timed-out shutdown exits non-zero, so an orchestrator can tell the difference.
+When `startAgentToolApplication` installs signal handlers, a fully drained and cleaned shutdown
+exits `0`; a failed, timed-out, or cleanup-deferred shutdown exits non-zero, so an orchestrator can
+tell the difference.
 `startStdioAgentToolApplication` uses the same handler — one signal sequence, one set of exit-code
 semantics — and differs only in what teardown means: it drains the application, runs the capability
 `stop` hook, and closes the MCP server last, exactly where HTTP closes its listener.
@@ -517,6 +528,21 @@ disconnects while queued releases its slot immediately.
 Symlinks are resolved _before_ containment is checked, so a link whose target escapes is rejected
 rather than followed. No capability policy lives here: supported extensions, repository semantics,
 allowed source kinds, and image rules are all composed on top by the capability.
+
+For large files, `RootBoundary.openFile` accepts the original untrusted relative input and returns
+only descriptor metadata, a bounded positional preview, a descriptor-backed stream, and idempotent
+close. POSIX uses `O_NOFOLLOW` for the final component. Windows has no Node-exposed equivalent, so
+the runtime documents and tests its weaker post-open `lstat` plus descriptor/path identity strategy
+instead of claiming POSIX atomicity. A filesystem that cannot provide non-zero identity metadata is
+rejected closed. This confines that one opened file; it does not sandbox later filesystem access by
+a subprocess.
+
+**Scratch workspace** — `CapabilityContext.createScratchWorkspace` atomically creates and tracks a
+private temporary directory. The runtime removes owned workspaces on startup rollback and after
+normal drained shutdown; successful manual disposal releases ownership. POSIX mode is `0700`.
+Windows uses its portable directory/lifecycle guarantee because Node mode bits are not Windows ACLs.
+Untracked background processes remain capability defects: the runtime cannot know they still use a
+directory.
 
 **Safe process execution** — `buildChildEnvironment`, `resolveExecutable`, `runBoundedProcess`.
 The child environment is an **allowlist built from scratch**, not a filtered copy, so application
@@ -579,7 +605,7 @@ it('satisfies platform registry conformance', async () => {
 Available suites: `runRegistryConformance`, `runRoutingConformance`, `runHttpConformance`,
 `runMcpConformance`, `runOpenApiConformance`, `runTransportParity`, `runAuthConformance`,
 `runConfigConformance`, `runLifecycleConformance`, `runRootBoundaryConformance`,
-`runProcessConformance`, `runMetadataConformance`.
+`runScratchWorkspaceConformance`, `runProcessConformance`, `runMetadataConformance`.
 
 The testkit imports no test runner, so each suite runs inside whichever `it(...)` a capability
 already uses. Every suite tests **platform** invariants only; domain behaviour stays in the

@@ -62,20 +62,21 @@ describe('platform conformance', () => {
 
 ## Suites
 
-| Suite                        | Proves                                                                                                              |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `runRegistryConformance`     | Unique names, published schemas, input and output validation, no leakage of an invalid handler result.              |
-| `runRoutingConformance`      | Routing content quality, prerequisite and next-step references, state disclosure matching kind.                     |
-| `runOpenApiConformance`      | One operation per tool, schemas derived from the registry, consequentiality following kind, shared error responses. |
-| `runHttpConformance`         | Public and protected surfaces, request-id bounds and echo, cache headers, credential handling, normalized 404s.     |
-| `runMcpConformance`          | Instructions published, tool metadata verbatim from the registry, read and write invocation, in-band failures.      |
-| `runTransportParity`         | The same tool and input produce the same result over HTTP and MCP.                                                  |
-| `runAuthConformance`         | Credential strength enforcement, safe principal identity, production refusal of disabled auth.                      |
-| `runConfigConformance`       | Capability config composes with the platform, blank handling, strict booleans, cross-field validation.              |
-| `runLifecycleConformance`    | Start and stop hooks, readiness aggregation, draining behaviour, in-flight cancellation.                            |
-| `runRootBoundaryConformance` | In-root resolution, traversal denial, absolute and symlink escape denial, root addressability.                      |
-| `runProcessConformance`      | No shell, timeouts, cancellation, output bounds, secret-free child environment, queue overflow.                     |
-| `runMetadataConformance`     | Truthful metadata accepted, placeholders and version drift rejected.                                                |
+| Suite                            | Proves                                                                                                              |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `runRegistryConformance`         | Unique names, published schemas, input and output validation, no leakage of an invalid handler result.              |
+| `runRoutingConformance`          | Routing content quality, prerequisite and next-step references, state disclosure matching kind.                     |
+| `runOpenApiConformance`          | One operation per tool, schemas derived from the registry, consequentiality following kind, shared error responses. |
+| `runHttpConformance`             | Public and protected surfaces, request-id bounds and echo, cache headers, credential handling, normalized 404s.     |
+| `runMcpConformance`              | Instructions published, tool metadata verbatim from the registry, read and write invocation, in-band failures.      |
+| `runTransportParity`             | The same tool and input produce the same result over HTTP and MCP.                                                  |
+| `runAuthConformance`             | Credential strength enforcement, safe principal identity, production refusal of disabled auth.                      |
+| `runConfigConformance`           | Capability config composes with the platform, blank handling, strict booleans, cross-field validation.              |
+| `runLifecycleConformance`        | Start and stop hooks, readiness aggregation, draining behaviour, in-flight cancellation.                            |
+| `runRootBoundaryConformance`     | In-root resolution plus confined preview/stream metadata, identity, size, regular-file, and symlink guarantees.     |
+| `runScratchWorkspaceConformance` | Lifetime existence, portable permission expectation, shutdown cleanup, and idempotent manual disposal.              |
+| `runProcessConformance`          | No shell, timeouts, cancellation, output bounds, secret-free child environment, queue overflow.                     |
+| `runMetadataConformance`         | Truthful metadata accepted, placeholders and version drift rejected.                                                |
 
 ## Fixtures
 

@@ -337,11 +337,12 @@ describe('application lifecycle integration', () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     const startedAt = Date.now();
-    await application.shutdown();
+    await expect(application.shutdown()).rejects.toThrow(/shutdown is incomplete/u);
     const elapsed = Date.now() - startedAt;
 
     expect(application.lifecycle.state).toBe('stopped');
-    // Bounded by the drain budget rather than by the stuck handler's own duration.
+    // Bounded by the drain budget rather than by the stuck handler's own duration, but no longer
+    // reported as a clean teardown while admitted work remains active.
     expect(elapsed).toBeLessThan(1500);
     await pending;
   });

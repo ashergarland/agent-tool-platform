@@ -12,6 +12,8 @@ import {
   type ReadinessReport,
   type ReadinessResult,
 } from '../lifecycle/index.js';
+import { combineErrors, throwCollectedErrors } from '../lifecycle/failures.js';
+import { ScratchWorkspaceOwner } from '../lifecycle/scratch.js';
 import { installShutdownSignalHandlers } from '../lifecycle/signals.js';
 import { createLogger } from '../logging/logger.js';
 import { createStdioMcpServer } from '../mcp/stdio.js';
@@ -45,7 +47,10 @@ export interface AgentToolApplication<TConfig extends PlatformConfig, TServices>
   readiness(): Promise<ReadinessReport>;
   /** Runs capability `start` hooks and marks the application ready. */
   start(): Promise<void>;
-  /** Drains, runs capability `stop` hooks, then closes the HTTP listener. */
+  /**
+   * Drains, runs capability `stop` hooks, cleans lifecycle resources, then closes HTTP. Rejects
+   * when admitted work exceeds the drain budget and resource cleanup must continue asynchronously.
+   */
   shutdown(): Promise<void>;
 }
 
@@ -85,19 +90,52 @@ export const createAgentToolApplication = async <
 
   const logger = options.logger ?? createLogger(config);
   const lifecycle = new ApplicationLifecycle();
+  const scratchWorkspaces = new ScratchWorkspaceOwner();
   // Opt-in by default. A capability that wants invocation telemetry in its logs passes
   // `loggingTelemetrySink(logger)` explicitly, rather than every deployment paying for a log line
   // per call because the platform decided for it.
   const telemetry = options.telemetry ?? noopTelemetrySink;
 
-  const capabilityContext: CapabilityContext<TConfig> = { config, logger, lifecycle, telemetry };
-  const services = await capability.createServices(capabilityContext);
+  const capabilityContext: CapabilityContext<TConfig> = {
+    config,
+    logger,
+    lifecycle,
+    telemetry,
+    createScratchWorkspace: (scratchOptions) => scratchWorkspaces.create(scratchOptions),
+  };
+  const failAssembly = async (error: unknown): Promise<never> => {
+    const cleanupErrors: unknown[] = [];
+    try {
+      lifecycle.beginDraining();
+    } catch (lifecycleError) {
+      cleanupErrors.push(lifecycleError);
+    }
+    cleanupErrors.push(...(await scratchWorkspaces.disposeAll()));
+    try {
+      lifecycle.markStopped();
+    } catch (lifecycleError) {
+      cleanupErrors.push(lifecycleError);
+    }
+    throw combineErrors(error, cleanupErrors, 'Application assembly and scratch cleanup failed');
+  };
+
+  let services: TServices;
+  try {
+    services = await capability.createServices(capabilityContext);
+  } catch (error) {
+    return failAssembly(error);
+  }
   const runtimeContext: CapabilityRuntimeContext<TConfig, TServices> = {
     ...capabilityContext,
     services,
   };
 
-  const registry = createToolRegistry(capability.tools);
+  let registry: ToolRegistry<TServices>;
+  try {
+    registry = createToolRegistry(capability.tools);
+  } catch (error) {
+    return failAssembly(error);
+  }
 
   const estimator: CapabilityTelemetryEstimator | undefined = capability.telemetry
     ?.estimateInvocation
@@ -132,25 +170,53 @@ export const createAgentToolApplication = async <
 
   const requestTracker = new RequestTracker();
 
-  const http = createHttpServer<TConfig, TServices>({
-    config,
-    logger,
-    services,
-    registry,
-    invoker,
-    lifecycle,
-    readiness: readinessAggregator,
-    readinessContext: undefined,
-    manifest: capability.manifest,
-    instructions: capability.instructions,
-    protectedRoutes: capability.protectedRoutes,
-    publicRoutes: capability.publicRoutes,
-    authenticatorOptions: options.authenticatorOptions,
-    requestTracker,
-  });
+  let http: HttpServer;
+  try {
+    http = createHttpServer<TConfig, TServices>({
+      config,
+      logger,
+      services,
+      registry,
+      invoker,
+      lifecycle,
+      readiness: readinessAggregator,
+      readinessContext: undefined,
+      manifest: capability.manifest,
+      instructions: capability.instructions,
+      protectedRoutes: capability.protectedRoutes,
+      publicRoutes: capability.publicRoutes,
+      authenticatorOptions: options.authenticatorOptions,
+      requestTracker,
+    });
+  } catch (error) {
+    return failAssembly(error);
+  }
 
   const drainTimeoutMs = options.drainTimeoutMs ?? config.http.shutdownGraceMs;
   let shutdownOnce: Promise<void> | undefined;
+  let deferredScratchCleanup: Promise<void> | undefined;
+
+  const deferScratchCleanupUntilIdle = (): void => {
+    if (deferredScratchCleanup !== undefined) return;
+    deferredScratchCleanup = Promise.all([
+      invoker.waitUntilDrained(),
+      requestTracker.waitUntilDrained(),
+    ]).then(async () => {
+      const errors = await scratchWorkspaces.disposeAll();
+      if (errors.length > 0) {
+        logger.error(
+          {
+            err:
+              errors.length === 1
+                ? errors[0]
+                : new AggregateError(errors, 'Scratch workspace cleanup failed'),
+            event: 'scratch.cleanup.failed',
+          },
+          'scratch workspace cleanup failed after timed-out application drain',
+        );
+      }
+    });
+  };
 
   /**
    * Ordered teardown:
@@ -160,15 +226,21 @@ export const createAgentToolApplication = async <
    *  2. wait, within the configured grace period, for in-flight tool invocations *and* in-flight
    *     HTTP requests to unwind. Both are needed: capability extension routes never run through
    *     the invoker, and tool calls over stdio MCP never run through HTTP;
-   *  3. only then run the capability `stop` hook, so no handler — tool or route — is torn out from
-   *     under a call still using the domain resources it is about to destroy;
-   *  4. close the listener last.
+   *  3. run the capability `stop` hook after that bounded wait;
+   *  4. clean scratch workspaces only after admitted work is actually idle, deferring cleanup when
+   *     a handler exceeded the drain budget;
+   *  5. close the listener last.
    *
-   * Step 3 is the whole point. Running `stop()` first is what produces use-after-teardown failures
-   * during shutdown.
+   * Steps 2 and 4 are distinct on purpose: shutdown remains bounded for a handler that ignores
+   * cancellation, but its scratch directory is never deleted while the runtime still tracks it.
    */
   const runShutdown = async (): Promise<void> => {
-    lifecycle.beginDraining();
+    const errors: unknown[] = [];
+    try {
+      lifecycle.beginDraining();
+    } catch (error) {
+      errors.push(error);
+    }
     readinessAggregator.invalidate();
 
     const deadline = Date.now() + drainTimeoutMs;
@@ -192,10 +264,37 @@ export const createAgentToolApplication = async <
 
     try {
       await capability.lifecycle?.stop?.(runtimeContext);
-    } finally {
-      await http.close();
-      lifecycle.markStopped();
+    } catch (error) {
+      errors.push(error);
     }
+
+    if (invoker.activeCount === 0 && requestTracker.activeCount === 0) {
+      errors.push(...(await scratchWorkspaces.disposeAll()));
+    } else {
+      // A handler that exceeded the drain budget must not lose a workspace it is still using.
+      // Preserve bounded shutdown by cleaning asynchronously as soon as every admitted call exits,
+      // but reject this shutdown attempt so signal handling cannot report incomplete teardown as
+      // clean.
+      deferScratchCleanupUntilIdle();
+      errors.push(
+        new Error(
+          'Application shutdown is incomplete because admitted work exceeded the drain budget; ' +
+            'lifecycle resource cleanup remains deferred',
+        ),
+      );
+    }
+
+    try {
+      await http.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      lifecycle.markStopped();
+    } catch (error) {
+      errors.push(error);
+    }
+    throwCollectedErrors(errors, 'Application shutdown failed');
   };
 
   return {
@@ -222,8 +321,18 @@ export const createAgentToolApplication = async <
       }),
     readiness: () => readinessAggregator.evaluate(undefined),
     async start(): Promise<void> {
-      await capability.lifecycle?.start?.(runtimeContext);
-      lifecycle.markReady();
+      try {
+        await capability.lifecycle?.start?.(runtimeContext);
+        lifecycle.markReady();
+      } catch (error) {
+        shutdownOnce ??= runShutdown();
+        try {
+          await shutdownOnce;
+        } catch (cleanupError) {
+          throw combineErrors(error, [cleanupError], 'Application startup and rollback failed');
+        }
+        throw error;
+      }
     },
     async shutdown(): Promise<void> {
       // Memoised so concurrent callers, a repeated call, and a signal racing an explicit shutdown
@@ -253,22 +362,31 @@ export const startAgentToolApplication = async <
   options: StartApplicationOptions<TConfig> = {},
 ): Promise<AgentToolApplication<TConfig, TServices>> => {
   const application = await createAgentToolApplication(capability, options);
-  await application.start();
-  await application.http.listen({
-    host: application.config.http.host,
-    port: application.config.http.port,
-  });
-
-  if (options.handleSignals !== false) {
-    // Shared with the stdio entry point: one signal sequence, one set of exit-code semantics.
-    installShutdownSignalHandlers({
-      logger: application.logger,
-      graceMs: application.config.http.shutdownGraceMs,
-      shutdown: () => application.shutdown(),
+  try {
+    await application.start();
+    await application.http.listen({
+      host: application.config.http.host,
+      port: application.config.http.port,
     });
-  }
 
-  return application;
+    if (options.handleSignals !== false) {
+      // Shared with the stdio entry point: one signal sequence, one set of exit-code semantics.
+      installShutdownSignalHandlers({
+        logger: application.logger,
+        graceMs: application.config.http.shutdownGraceMs,
+        shutdown: () => application.shutdown(),
+      });
+    }
+
+    return application;
+  } catch (error) {
+    try {
+      await application.shutdown();
+    } catch (cleanupError) {
+      throw combineErrors(error, [cleanupError], 'Application startup and rollback failed');
+    }
+    throw error;
+  }
 };
 
 export { noopTelemetrySink };
