@@ -483,13 +483,17 @@ in a deliberate order:
 4. **Clean lifecycle-owned scratch workspaces.** Cleanup runs after the stop hook only when admitted
    tools and custom routes are actually idle. If the bounded drain timed out, scratch cleanup is
    deferred until the tracked work exits rather than deleting a directory underneath it.
-5. **Close the listener.**
+5. **Close the listener and remaining connections.** Fastify stops accepting new TCP connections
+   and destroys persistent network sockets that are still active after the bounded drain. A forced
+   socket close does not count as handler settlement: the handler's promise remains tracked until
+   it exits, so deferred scratch cleanup cannot run underneath disconnected code.
 
 A fully drained shutdown resolves only after scratch cleanup. A bounded shutdown with admitted work
-still active rejects as incomplete after scheduling best-effort cleanup; if an in-process caller
-keeps the process alive, cleanup runs when that work later settles. Signal-driven shutdown maps that
-rejection to a non-zero exit instead of terminating with a false clean result. It never extends the
-drain indefinitely and never deletes the workspace underneath the active handler.
+still active closes the listener and its active sockets, then rejects as incomplete after scheduling
+best-effort cleanup; if an in-process caller keeps the process alive, cleanup runs when that work
+later settles. Signal-driven shutdown maps that rejection to a non-zero exit instead of terminating
+with a false clean result. It never extends the drain indefinitely and never deletes the workspace
+underneath the active handler.
 
 Steps 1 and 3 together are the point. Waiting alone is not enough: request tracking only protects
 work that is _already_ in flight, so without the admission guard a request arriving after the

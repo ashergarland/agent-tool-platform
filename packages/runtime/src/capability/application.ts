@@ -229,7 +229,8 @@ export const createAgentToolApplication = async <
    *  3. run the capability `stop` hook after that bounded wait;
    *  4. clean scratch workspaces only after admitted work is actually idle, deferring cleanup when
    *     a handler exceeded the drain budget;
-   *  5. close the listener last.
+   *  5. close the listener last, forcing any network connections still active after the bounded
+   *     drain to close without treating their disconnected handlers as settled.
    *
    * Steps 2 and 4 are distinct on purpose: shutdown remains bounded for a handler that ignores
    * cancellation, but its scratch directory is never deleted while the runtime still tracks it.

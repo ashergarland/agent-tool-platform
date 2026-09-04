@@ -56,9 +56,10 @@ const applications: AgentToolApplication<PlatformConfig, ScratchServices>[] = []
 const createApplication = async (
   options: ScratchCapabilityOptions = {},
   drainTimeoutMs = 1000,
+  env: NodeJS.ProcessEnv = {},
 ): Promise<AgentToolApplication<PlatformConfig, ScratchServices>> => {
   const application = await createAgentToolApplication(scratchCapability(options), {
-    config: createTestPlatformConfig({ serviceName: 'scratch-test' }),
+    config: createTestPlatformConfig({ serviceName: 'scratch-test', env }),
     logger: createSilentLogger(),
     drainTimeoutMs,
   });
@@ -343,6 +344,131 @@ describe('lifecycle-owned scratch workspaces', () => {
     await incompleteShutdown;
     expect(handlerError).toBeUndefined();
     await waitUntilRemoved(application.services.workspace.path);
+  });
+
+  it('bounds listener shutdown while a connected route handler continues using scratch', async () => {
+    let entered!: () => void;
+    const routeEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const routeRelease = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let settled!: () => void;
+    const routeSettled = new Promise<void>((resolve) => {
+      settled = resolve;
+    });
+    let routeStarted = false;
+    let scratchWriteSucceeded = false;
+    let handlerError: unknown;
+
+    const application = await createApplication(
+      {
+        publicRoutes: [
+          (router, { services }) => {
+            router.get('/scratch/connected-shutdown', async () => {
+              routeStarted = true;
+              entered();
+              await routeRelease;
+              try {
+                await writeFile(join(services.workspace.path, 'connected.txt'), 'done', 'utf8');
+                scratchWriteSucceeded = true;
+                return { used: true };
+              } catch (error) {
+                handlerError = error;
+                throw error;
+              } finally {
+                settled();
+              }
+            });
+          },
+        ],
+      },
+      25,
+      { REQUEST_TIMEOUT_MS: '0' },
+    );
+    await application.start();
+    await application.http.listen({ host: '127.0.0.1', port: 0 });
+    const address = application.http.server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('Expected a TCP listener address');
+    }
+
+    const path = application.services.workspace.path;
+    let client: ClientRequest | undefined;
+    let clientClosed: Promise<void> | undefined;
+    let shutdownDeadline: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      clientClosed = new Promise<void>((resolve, reject) => {
+        client = httpRequest({
+          host: '127.0.0.1',
+          port: address.port,
+          path: '/scratch/connected-shutdown',
+          method: 'GET',
+        });
+        client.on('error', (error: NodeJS.ErrnoException) => {
+          if (error.code === 'ECONNRESET') resolve();
+          else reject(error);
+        });
+        client.on('close', resolve);
+        client.end();
+      });
+
+      await routeEntered;
+      const shutdownStartedAt = Date.now();
+      const shutdownResult = application.shutdown().then(
+        () => ({ outcome: 'resolved' as const, elapsedMs: Date.now() - shutdownStartedAt }),
+        (error: unknown) => ({
+          outcome: 'rejected' as const,
+          error,
+          elapsedMs: Date.now() - shutdownStartedAt,
+        }),
+      );
+      const shutdownTimeout = new Promise<{ readonly outcome: 'pending' }>((resolve) => {
+        shutdownDeadline = setTimeout(() => resolve({ outcome: 'pending' }), 1500);
+        shutdownDeadline.unref?.();
+      });
+
+      const result = await Promise.race([shutdownResult, shutdownTimeout]);
+      if (result.outcome === 'pending') {
+        throw new Error(
+          'Application shutdown remained pending beyond 1500 ms with an active HTTP connection',
+        );
+      }
+      if (result.outcome === 'resolved') {
+        throw new Error('Expected shutdown with admitted work to reject as incomplete');
+      }
+      if (!(result.error instanceof Error)) {
+        throw new Error('Expected incomplete shutdown to reject with an Error', {
+          cause: result.error,
+        });
+      }
+
+      expect(result.error.message).toMatch(/shutdown is incomplete/u);
+      expect(result.elapsedMs).toBeLessThan(1500);
+      await clientClosed;
+      expect(application.http.server.listening).toBe(false);
+      expect(application.lifecycle.state).toBe('stopped');
+      expect(await exists(path)).toBe(true);
+
+      release();
+      await routeSettled;
+      expect(handlerError).toBeUndefined();
+      expect(scratchWriteSucceeded).toBe(true);
+      await waitUntilRemoved(path);
+    } finally {
+      if (shutdownDeadline !== undefined) clearTimeout(shutdownDeadline);
+      release();
+      client?.destroy();
+      await Promise.allSettled([
+        application.shutdown(),
+        ...(clientClosed === undefined ? [] : [clientClosed]),
+        ...(routeStarted ? [routeSettled] : []),
+      ]);
+      if (await exists(path)) await waitUntilRemoved(path);
+    }
   });
 
   it('reports signal-driven shutdown as incomplete while scratch cleanup is deferred', async () => {

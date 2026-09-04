@@ -116,8 +116,10 @@ A fully drained `shutdown()` resolves only after owned cleanup finishes. If admi
 the bounded drain budget, `shutdown()` rejects as incomplete while best-effort cleanup waits for
 that work to settle. Signal-driven startup helpers therefore exit non-zero rather than claiming a
 clean teardown; an in-process caller that keeps the process alive still gets deferred cleanup.
-Cleanup failures do not skip later workspaces. Synchronous failures are surfaced; failures from
-necessarily deferred cleanup are logged.
+For hosted HTTP, the listener and active persistent connections are closed after the drain budget,
+but a disconnected route remains tracked until its handler promise settles. Cleanup failures do not
+skip later workspaces. Synchronous failures are surfaced; failures from necessarily deferred cleanup
+are logged.
 
 On POSIX, the directory is created with and reasserted to mode `0700`. Node's POSIX mode bits do not
 describe Windows ACLs, so Windows guarantees atomic unique-directory creation and lifecycle
