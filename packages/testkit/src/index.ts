@@ -28,6 +28,10 @@ export {
 
 export { runAuthConformance, type AuthConformanceOptions } from './auth.js';
 export { runConfigConformance, type ConfigConformanceOptions } from './config.js';
+export {
+  runDeploymentContractConformance,
+  type DeploymentContractConformanceOptions,
+} from './deployment/index.js';
 export { runHttpConformance, type HttpConformanceOptions } from './http.js';
 export { runLifecycleConformance, type LifecycleConformanceOptions } from './lifecycle.js';
 export {

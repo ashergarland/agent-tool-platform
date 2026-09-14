@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import {
   runAuthConformance,
   runConfigConformance,
+  runDeploymentContractConformance,
   runHttpConformance,
   runLifecycleConformance,
   runMcpConformance,
@@ -229,5 +230,21 @@ describe('testkit conformance suites', () => {
       },
     });
     expect(result.failures).toEqual([]);
+  });
+
+  it('deployment contract conformance', async () => {
+    const fixtureRoot = new URL('./fixtures/deployment/', import.meta.url);
+    const [declaration, instance] = await Promise.all(
+      ['capability-profiles.json', 'local-package.deployment.json'].map(
+        async (name): Promise<unknown> =>
+          JSON.parse(await readFile(new URL(name, fixtureRoot), 'utf8')) as unknown,
+      ),
+    );
+
+    const paired = runDeploymentContractConformance({ declaration, instance });
+    expect(paired.failures).toEqual([]);
+
+    const declarationOnly = runDeploymentContractConformance({ declaration });
+    expect(declarationOnly.failures).toEqual([]);
   });
 });

@@ -1,0 +1,152 @@
+{
+  "contractVersion": 1,
+  "kind": "deployment-instance",
+  "capability": {
+    "id": "fixture.invalid/safe-capability"
+  },
+  "environment": {
+    "name": "fixture-hosted",
+    "classification": "test"
+  },
+  "profile": {
+    "id": "hosted-provider",
+    "dimensions": {
+      "execution": "hosted",
+      "delivery": "container",
+      "access": "authenticated-service",
+      "workload": "none",
+      "provider": "external",
+      "mutation": "read-only"
+    }
+  },
+  "declaration": {
+    "repository": "https://code.invalid/safe-capability.git",
+    "revision": "1111111111111111111111111111111111111111",
+    "path": "capability-profiles.json"
+  },
+  "source": {
+    "repository": "https://code.invalid/safe-capability.git",
+    "revision": "2222222222222222222222222222222222222222",
+    "path": "."
+  },
+  "artifact": {
+    "kind": "container",
+    "registry": "registry.invalid",
+    "image": "registry.invalid/safe-fixture/capability",
+    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "sourceBinding": {
+      "revision": "2222222222222222222222222222222222222222",
+      "method": "attestation",
+      "reference": "attestation:fixture/container-source"
+    }
+  },
+  "deployment": {
+    "entrypoint": {
+      "reference": "dist/hosted-entry.js",
+      "arguments": []
+    },
+    "parameters": {
+      "reference": "operator-git:fixtures/hosted/parameters.json",
+      "schemaId": "urn:safe-fixture:hosted-configuration:v1"
+    },
+    "hosted": {
+      "authenticatedAccess": {
+        "mechanism": "Fixture bearer authentication.",
+        "authorityReference": "operator-git:fixtures/hosted/authentication.json"
+      },
+      "readiness": {
+        "reference": "route:/health/ready",
+        "timeoutSeconds": 120
+      },
+      "versionIdentity": {
+        "reference": "route:/version",
+        "expectedSourceRevision": "2222222222222222222222222222222222222222"
+      },
+      "configurationBoundsReference": "operator-git:fixtures/hosted/bounds.json",
+      "rollout": {
+        "strategy": "One non-live fixture replica at a time.",
+        "maximumUnavailable": 1,
+        "requireArtifactEvidence": true
+      }
+    }
+  },
+  "secrets": {
+    "provider": {
+      "kind": "external",
+      "reference": "secret-store:fixture/non-live"
+    },
+    "references": [
+      {
+        "name": "safe-fixture-provider-token",
+        "reference": "secret-store:fixture/non-live/provider-token"
+      }
+    ]
+  },
+  "prerequisites": {
+    "provider": [
+      {
+        "id": "fixture-api-enabled",
+        "reference": "provider-prerequisite:fixture/api-enabled"
+      }
+    ],
+    "identity": {
+      "reference": "identity:fixture/hosted-service",
+      "rbac": [
+        {
+          "scope": "The non-live fixture provider account.",
+          "permissions": ["Read non-live fixture provider records."]
+        }
+      ]
+    },
+    "registrations": [
+      {
+        "id": "fixture-registration",
+        "reference": "registration:fixture/hosted-service"
+      }
+    ]
+  },
+  "verification": {
+    "identity": [
+      {
+        "id": "service-identity",
+        "expectation": "The request principal resolves to the non-live fixture identity."
+      }
+    ],
+    "readiness": [
+      {
+        "id": "process-readiness",
+        "expectation": "The process readiness surface reports ready after startup."
+      }
+    ],
+    "version": [
+      {
+        "id": "source-version",
+        "expectation": "The version surface reports the pinned source revision."
+      }
+    ],
+    "behavior": [
+      {
+        "id": "hosted-behavior",
+        "expectation": "An authenticated fixture request returns the expected safe response."
+      }
+    ],
+    "provider": [
+      {
+        "id": "provider-readiness",
+        "expectation": "Provider readiness succeeds independently of process liveness."
+      }
+    ],
+    "provenance": [
+      {
+        "id": "container-provenance",
+        "expectation": "The container digest attestation binds to the pinned source revision."
+      }
+    ]
+  },
+  "rollback": {
+    "kind": "target",
+    "sourceRevision": "3333333333333333333333333333333333333333",
+    "artifactDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "extensions": []
+}

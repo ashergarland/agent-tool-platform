@@ -34,6 +34,7 @@ interface PackageManifest {
   readonly keywords?: readonly string[];
   readonly files?: readonly string[];
   readonly exports?: Record<string, unknown>;
+  readonly bin?: Record<string, string>;
   readonly publishConfig?: Record<string, string>;
   readonly repository?: Record<string, string>;
   readonly bugs?: Record<string, string>;
@@ -120,6 +121,29 @@ describe('publishable package metadata', () => {
   it('keeps the repository root and the example fixture unpublishable', () => {
     expect(root.private).toBe(true);
     expect(readManifest('examples/minimal-capability/package.json').private).toBe(true);
+  });
+
+  it('ships deployment schemas, runtime commands, and matched package subpaths', () => {
+    expect(runtime.files).toContain('bin');
+    expect(runtime.files).toContain('schemas');
+    expect(runtime.bin).toEqual({
+      'agent-tool-validate-deployment': 'bin/validate-deployment.js',
+      'agent-tool-validate-metadata': 'bin/validate-metadata.js',
+    });
+    expect(runtime.exports?.['./deployment']).toEqual({
+      types: './dist/deployment/index.d.ts',
+      import: './dist/deployment/index.js',
+    });
+    expect(runtime.exports?.['./deployment/schemas/capability-profile-declaration-v1.json']).toBe(
+      './schemas/deployment/v1/capability-profile-declaration.schema.json',
+    );
+    expect(runtime.exports?.['./deployment/schemas/deployment-instance-v1.json']).toBe(
+      './schemas/deployment/v1/deployment-instance.schema.json',
+    );
+    expect(testkit.exports?.['./deployment']).toEqual({
+      types: './dist/deployment/index.d.ts',
+      import: './dist/deployment/index.js',
+    });
   });
 
   it('passes the release consistency check', () => {

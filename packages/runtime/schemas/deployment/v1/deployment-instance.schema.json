@@ -1,0 +1,566 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-tool-platform:schema:deployment-instance:v1",
+  "title": "Deployment instance contract v1",
+  "description": "Private non-secret desired state selecting one immutable capability profile and source.",
+  "$comment": "Conditional and cross-document invariants are enforced by agent-tool-validate-deployment.",
+  "type": "object",
+  "properties": {
+    "contractVersion": { "type": "number", "const": 1 },
+    "kind": { "type": "string", "const": "deployment-instance" },
+    "capability": {
+      "type": "object",
+      "properties": { "id": { "$ref": "#/$defs/__schema0" } },
+      "required": ["id"],
+      "additionalProperties": false
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "name": { "$ref": "#/$defs/__schema1" },
+        "classification": {
+          "type": "string",
+          "enum": ["development", "test", "staging", "production", "other"]
+        }
+      },
+      "required": ["name", "classification"],
+      "additionalProperties": false
+    },
+    "profile": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/__schema1" },
+        "dimensions": {
+          "type": "object",
+          "properties": {
+            "execution": { "type": "string", "enum": ["local", "hosted"] },
+            "delivery": { "type": "string", "enum": ["source", "package", "container"] },
+            "access": { "type": "string", "enum": ["local-process", "authenticated-service"] },
+            "workload": {
+              "type": "string",
+              "enum": ["none", "filesystem", "mount", "upload", "object-store", "provider"]
+            },
+            "provider": { "type": "string", "enum": ["none", "external"] },
+            "mutation": { "type": "string", "enum": ["read-only", "mutating"] }
+          },
+          "required": ["execution", "delivery", "access", "workload", "provider", "mutation"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["id", "dimensions"],
+      "additionalProperties": false
+    },
+    "declaration": {
+      "type": "object",
+      "properties": {
+        "repository": { "$ref": "#/$defs/__schema2" },
+        "revision": { "$ref": "#/$defs/__schema3" },
+        "path": { "type": "string", "const": "capability-profiles.json" }
+      },
+      "required": ["repository", "revision", "path"],
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "repository": { "$ref": "#/$defs/__schema2" },
+        "revision": { "$ref": "#/$defs/__schema3" },
+        "path": { "$ref": "#/$defs/__schema4" }
+      },
+      "required": ["repository", "revision", "path"],
+      "additionalProperties": false
+    },
+    "artifact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "const": "package" },
+            "registry": { "$ref": "#/$defs/__schema2" },
+            "identifier": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "^\\S+$"
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^(?!latest$)(?!next$)(?!.*[~^*<>=|,\\s]).+$"
+            },
+            "digest": { "$ref": "#/$defs/__schema5" },
+            "sourceBinding": { "$ref": "#/$defs/__schema6" }
+          },
+          "required": ["kind", "registry", "identifier", "version", "digest", "sourceBinding"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "const": "container" },
+            "registry": { "$ref": "#/$defs/__schema7" },
+            "image": { "$ref": "#/$defs/__schema7" },
+            "digest": { "$ref": "#/$defs/__schema5" },
+            "sourceBinding": { "$ref": "#/$defs/__schema6" }
+          },
+          "required": ["kind", "registry", "image", "digest", "sourceBinding"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "const": "build-from-source" },
+            "expectedArtifactKind": { "type": "string", "enum": ["package", "container"] },
+            "buildEntrypoint": { "$ref": "#/$defs/__schema4" },
+            "provenance": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "type": "string",
+                  "enum": ["attestation", "provenance", "build-record"]
+                },
+                "reference": { "$ref": "#/$defs/__schema7" }
+              },
+              "required": ["method", "reference"],
+              "additionalProperties": false
+            },
+            "requiredEvidence": {
+              "type": "object",
+              "properties": {
+                "producedDigest": { "type": "boolean", "const": true },
+                "sourceBinding": { "type": "boolean", "const": true }
+              },
+              "required": ["producedDigest", "sourceBinding"],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "expectedArtifactKind",
+            "buildEntrypoint",
+            "provenance",
+            "requiredEvidence"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "deployment": {
+      "type": "object",
+      "properties": {
+        "entrypoint": {
+          "type": "object",
+          "properties": {
+            "reference": { "$ref": "#/$defs/__schema4" },
+            "arguments": { "type": "array", "items": { "type": "string", "maxLength": 500 } }
+          },
+          "required": ["reference", "arguments"],
+          "additionalProperties": false
+        },
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "reference": { "$ref": "#/$defs/__schema7" },
+            "schemaId": { "$ref": "#/$defs/__schema2" }
+          },
+          "required": ["reference", "schemaId"],
+          "additionalProperties": false
+        },
+        "localTrust": {
+          "type": "object",
+          "properties": {
+            "boundary": { "$ref": "#/$defs/__schema8" },
+            "provenanceVerification": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "type": "string",
+                  "enum": ["digest", "attestation", "package-metadata", "provenance"]
+                },
+                "reference": { "$ref": "#/$defs/__schema7" }
+              },
+              "required": ["method", "reference"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["boundary", "provenanceVerification"],
+          "additionalProperties": false
+        },
+        "hosted": {
+          "type": "object",
+          "properties": {
+            "authenticatedAccess": {
+              "type": "object",
+              "properties": {
+                "mechanism": { "$ref": "#/$defs/__schema8" },
+                "authorityReference": { "$ref": "#/$defs/__schema7" }
+              },
+              "required": ["mechanism", "authorityReference"],
+              "additionalProperties": false
+            },
+            "readiness": {
+              "type": "object",
+              "properties": {
+                "reference": { "$ref": "#/$defs/__schema7" },
+                "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 }
+              },
+              "required": ["reference", "timeoutSeconds"],
+              "additionalProperties": false
+            },
+            "versionIdentity": {
+              "type": "object",
+              "properties": {
+                "reference": { "$ref": "#/$defs/__schema7" },
+                "expectedSourceRevision": { "$ref": "#/$defs/__schema3" }
+              },
+              "required": ["reference", "expectedSourceRevision"],
+              "additionalProperties": false
+            },
+            "configurationBoundsReference": { "$ref": "#/$defs/__schema7" },
+            "rollout": {
+              "type": "object",
+              "properties": {
+                "strategy": { "$ref": "#/$defs/__schema8" },
+                "maximumUnavailable": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "requireArtifactEvidence": { "type": "boolean", "const": true }
+              },
+              "required": ["strategy", "maximumUnavailable", "requireArtifactEvidence"],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "authenticatedAccess",
+            "readiness",
+            "versionIdentity",
+            "configurationBoundsReference",
+            "rollout"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entrypoint", "parameters"],
+      "additionalProperties": false
+    },
+    "secrets": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": { "kind": { "type": "string", "const": "none" } },
+              "required": ["kind"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "const": "external" },
+                "reference": { "$ref": "#/$defs/__schema7" }
+              },
+              "required": ["kind", "reference"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$" },
+              "reference": { "$ref": "#/$defs/__schema7" }
+            },
+            "required": ["name", "reference"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["provider", "references"],
+      "additionalProperties": false
+    },
+    "workload": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["filesystem", "mount", "upload", "object-store", "provider"]
+        },
+        "source": {
+          "type": "object",
+          "properties": { "reference": { "$ref": "#/$defs/__schema7" } },
+          "required": ["reference"],
+          "additionalProperties": false
+        },
+        "interface": {
+          "type": "object",
+          "properties": { "reference": { "$ref": "#/$defs/__schema7" } },
+          "required": ["reference"],
+          "additionalProperties": false
+        },
+        "authorization": {
+          "type": "object",
+          "properties": {
+            "scope": { "$ref": "#/$defs/__schema8" },
+            "reference": { "$ref": "#/$defs/__schema7" }
+          },
+          "required": ["scope", "reference"],
+          "additionalProperties": false
+        },
+        "lifecycle": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["request", "session", "persistent"] },
+            "freshness": { "$ref": "#/$defs/__schema8" },
+            "cleanup": { "$ref": "#/$defs/__schema8" }
+          },
+          "required": ["mode", "freshness", "cleanup"],
+          "additionalProperties": false
+        },
+        "notReady": {
+          "type": "object",
+          "properties": {
+            "whenAbsent": { "type": "string", "const": "not-ready" },
+            "reasonCode": { "$ref": "#/$defs/__schema1" }
+          },
+          "required": ["whenAbsent", "reasonCode"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["kind", "source", "interface", "authorization", "lifecycle", "notReady"],
+      "additionalProperties": false
+    },
+    "prerequisites": {
+      "type": "object",
+      "properties": {
+        "provider": { "type": "array", "items": { "$ref": "#/$defs/__schema9" } },
+        "identity": {
+          "type": "object",
+          "properties": {
+            "reference": { "$ref": "#/$defs/__schema7" },
+            "rbac": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "scope": { "$ref": "#/$defs/__schema8" },
+                  "permissions": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/__schema8" }
+                  }
+                },
+                "required": ["scope", "permissions"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["reference", "rbac"],
+          "additionalProperties": false
+        },
+        "registrations": { "type": "array", "items": { "$ref": "#/$defs/__schema9" } }
+      },
+      "required": ["provider", "registrations"],
+      "additionalProperties": false
+    },
+    "mutation": {
+      "type": "object",
+      "properties": {
+        "enablement": {
+          "type": "object",
+          "properties": {
+            "default": { "type": "string", "const": "disabled" },
+            "reference": { "$ref": "#/$defs/__schema7" }
+          },
+          "required": ["default", "reference"],
+          "additionalProperties": false
+        },
+        "authorization": {
+          "type": "object",
+          "properties": { "reference": { "$ref": "#/$defs/__schema7" } },
+          "required": ["reference"],
+          "additionalProperties": false
+        },
+        "confirmation": {
+          "type": "object",
+          "properties": { "reference": { "$ref": "#/$defs/__schema7" } },
+          "required": ["reference"],
+          "additionalProperties": false
+        },
+        "durableRecord": {
+          "type": "object",
+          "properties": { "reference": { "$ref": "#/$defs/__schema7" } },
+          "required": ["reference"],
+          "additionalProperties": false
+        },
+        "authoritativeVerification": {
+          "type": "object",
+          "properties": { "expectation": { "$ref": "#/$defs/__schema8" } },
+          "required": ["expectation"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["enablement", "authorization", "confirmation", "authoritativeVerification"],
+      "additionalProperties": false
+    },
+    "verification": {
+      "type": "object",
+      "properties": {
+        "identity": { "type": "array", "items": { "$ref": "#/$defs/__schema10" } },
+        "readiness": { "type": "array", "items": { "$ref": "#/$defs/__schema10" } },
+        "version": { "type": "array", "items": { "$ref": "#/$defs/__schema10" } },
+        "behavior": { "type": "array", "items": { "$ref": "#/$defs/__schema10" } },
+        "provider": { "type": "array", "items": { "$ref": "#/$defs/__schema10" } },
+        "provenance": { "type": "array", "items": { "$ref": "#/$defs/__schema10" } }
+      },
+      "required": ["identity", "readiness", "version", "behavior", "provider", "provenance"],
+      "additionalProperties": false
+    },
+    "rollback": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "const": "target" },
+            "sourceRevision": { "$ref": "#/$defs/__schema3" },
+            "artifactDigest": { "$ref": "#/$defs/__schema5" }
+          },
+          "required": ["kind", "sourceRevision", "artifactDigest"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "const": "operator-strategy" },
+            "reference": { "$ref": "#/$defs/__schema7" },
+            "description": { "$ref": "#/$defs/__schema8" }
+          },
+          "required": ["kind", "reference", "description"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "extensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "id": { "$ref": "#/$defs/__schema2" },
+              "capabilityId": { "$ref": "#/$defs/__schema0" },
+              "path": { "$ref": "#/$defs/__schema4" }
+            },
+            "required": ["id", "capabilityId", "path"],
+            "additionalProperties": false
+          },
+          "parameters": {
+            "type": "object",
+            "propertyNames": { "type": "string" },
+            "additionalProperties": { "$ref": "#/$defs/__schema11" }
+          }
+        },
+        "required": ["schema", "parameters"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "contractVersion",
+    "kind",
+    "capability",
+    "environment",
+    "profile",
+    "declaration",
+    "source",
+    "artifact",
+    "deployment",
+    "secrets",
+    "prerequisites",
+    "verification",
+    "rollback",
+    "extensions"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[a-z0-9]+(?:[._/-][a-z0-9]+)*$"
+    },
+    "__schema1": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "__schema2": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "pattern": "^[a-z][a-z0-9+.-]*:\\S+$"
+    },
+    "__schema3": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "__schema4": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^(?:\\.|(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))\\S+)$"
+    },
+    "__schema5": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "__schema6": {
+      "type": "object",
+      "properties": {
+        "revision": { "$ref": "#/$defs/__schema3" },
+        "method": {
+          "type": "string",
+          "enum": ["attestation", "provenance", "package-metadata", "build-record"]
+        },
+        "reference": { "$ref": "#/$defs/__schema7" }
+      },
+      "required": ["revision", "method", "reference"],
+      "additionalProperties": false
+    },
+    "__schema7": { "type": "string", "minLength": 1, "maxLength": 1000, "pattern": "^\\S+$" },
+    "__schema8": { "type": "string", "minLength": 1, "maxLength": 1000, "pattern": "\\S" },
+    "__schema9": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/__schema1" },
+        "reference": { "$ref": "#/$defs/__schema7" }
+      },
+      "required": ["id", "reference"],
+      "additionalProperties": false
+    },
+    "__schema10": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/__schema1" },
+        "expectation": { "$ref": "#/$defs/__schema8" }
+      },
+      "required": ["id", "expectation"],
+      "additionalProperties": false
+    },
+    "__schema11": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "null" },
+        { "type": "array", "items": { "$ref": "#/$defs/__schema11" } },
+        {
+          "type": "object",
+          "propertyNames": { "type": "string" },
+          "additionalProperties": { "$ref": "#/$defs/__schema11" }
+        }
+      ]
+    }
+  }
+}

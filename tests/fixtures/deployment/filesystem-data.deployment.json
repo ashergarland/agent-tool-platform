@@ -1,0 +1,123 @@
+{
+  "contractVersion": 1,
+  "kind": "deployment-instance",
+  "capability": {
+    "id": "fixture.invalid/safe-capability"
+  },
+  "environment": {
+    "name": "fixture-filesystem",
+    "classification": "test"
+  },
+  "profile": {
+    "id": "filesystem-data",
+    "dimensions": {
+      "execution": "local",
+      "delivery": "source",
+      "access": "local-process",
+      "workload": "filesystem",
+      "provider": "none",
+      "mutation": "read-only"
+    }
+  },
+  "declaration": {
+    "repository": "https://code.invalid/safe-capability.git",
+    "revision": "1111111111111111111111111111111111111111",
+    "path": "capability-profiles.json"
+  },
+  "source": {
+    "repository": "https://code.invalid/safe-capability.git",
+    "revision": "2222222222222222222222222222222222222222",
+    "path": "."
+  },
+  "artifact": {
+    "kind": "build-from-source",
+    "expectedArtifactKind": "package",
+    "buildEntrypoint": "scripts/build-safe-package.mjs",
+    "provenance": {
+      "method": "build-record",
+      "reference": "build-record:fixture/required-after-build"
+    },
+    "requiredEvidence": {
+      "producedDigest": true,
+      "sourceBinding": true
+    }
+  },
+  "deployment": {
+    "entrypoint": {
+      "reference": "dist/filesystem-entry.js",
+      "arguments": []
+    },
+    "parameters": {
+      "reference": "operator-git:fixtures/filesystem/parameters.json",
+      "schemaId": "urn:safe-fixture:filesystem-configuration:v1"
+    },
+    "localTrust": {
+      "boundary": "Invoking local user with access limited to the selected fixture root.",
+      "provenanceVerification": {
+        "method": "provenance",
+        "reference": "build-record:fixture/required-after-build"
+      }
+    }
+  },
+  "secrets": {
+    "provider": {
+      "kind": "none"
+    },
+    "references": []
+  },
+  "workload": {
+    "kind": "filesystem",
+    "source": {
+      "reference": "fixture-data:non-live/input"
+    },
+    "interface": {
+      "reference": "docs/filesystem.md#data-interface"
+    },
+    "authorization": {
+      "scope": "Read only beneath the explicitly selected fixture root.",
+      "reference": "operator-git:fixtures/filesystem/authorization.json"
+    },
+    "lifecycle": {
+      "mode": "session",
+      "freshness": "Rescan at the start of each non-live fixture session.",
+      "cleanup": "Release file handles when the fixture session ends."
+    },
+    "notReady": {
+      "whenAbsent": "not-ready",
+      "reasonCode": "fixture-data-absent"
+    }
+  },
+  "prerequisites": {
+    "provider": [],
+    "registrations": []
+  },
+  "verification": {
+    "identity": [],
+    "readiness": [
+      {
+        "id": "filesystem-readiness",
+        "expectation": "The fixture reports not-ready until its explicit data root exists."
+      }
+    ],
+    "version": [],
+    "behavior": [
+      {
+        "id": "filesystem-behavior",
+        "expectation": "Only files beneath the selected non-live fixture root are read."
+      }
+    ],
+    "provider": [],
+    "provenance": [
+      {
+        "id": "build-provenance",
+        "expectation": "Rollout waits for a produced digest and source-binding build record."
+      }
+    ]
+  },
+  "rollback": {
+    "kind": "operator-strategy",
+    "reference": "operator-runbook:fixtures/filesystem-rollback",
+    "description": "Rebuild and restore the previously reviewed source pin."
+  },
+  "extensions": []
+}

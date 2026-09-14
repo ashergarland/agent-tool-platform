@@ -75,6 +75,7 @@ Deliberate subpath exports exist for narrower imports:
 | `/concurrency`  | `BoundedSemaphore`, `BoundedQueue`.                                                                                                      |
 | `/config`       | `PlatformConfig`, `defineCapabilityConfig`, `loadCapabilityConfig`, env parsing helpers.                                                 |
 | `/context`      | Request-id resolution and bounds.                                                                                                        |
+| `/deployment`   | Deployment contract v1 schemas, types, offline validation, and CLI runner.                                                               |
 | `/fs`           | `RootBoundary`, descriptor-backed confined files, and path containment helpers.                                                          |
 | `/http`         | `createHttpServer`, `FixedWindowRateLimiter`, the Fastify adapter.                                                                       |
 | `/lifecycle`    | `ApplicationLifecycle`, lifecycle-owned scratch types, readiness helpers, `installShutdownSignalHandlers`.                               |
@@ -178,13 +179,25 @@ access by Git, jq, ripgrep, or any other subprocess.
 
 ```bash
 agent-tool-validate-metadata --server server.json --package package.json [--registry entry.json]
+
+agent-tool-validate-deployment --declaration capability-profiles.json
+agent-tool-validate-deployment \
+  --declaration capability-profiles.json \
+  --instance deployment-instance.json
 ```
 
-Validates a capability repository's metadata: schema shape, semantic versioning, version agreement
-between `server.json` and `package.json`, truthful package and remote declarations, and the absence
-of placeholder content.
+The metadata command validates schema shape, semantic versioning, version agreement between
+`server.json` and `package.json`, truthful package and remote declarations, and the absence of
+placeholder content.
+
+The deployment command validates a public declaration alone or cross-validates it with private
+non-secret desired state. It is offline: it makes no provider, repository, deployment, or secret
+store calls. Standalone Draft 2020-12 schemas ship under `schemas/deployment/v1/`; the same schema
+objects and programmatic validators are exported from `/deployment`.
 
 ## Documentation
 
 See the [repository README](../../README.md) for the architecture, the capability contract, and the
-ownership boundaries between the platform, capabilities, and agent repositories.
+ownership boundaries between the platform, capabilities, and agent repositories. Deployment
+contract fields, conditional requirements, and source-checkout consumption are documented in
+[`docs/deployment-contracts.md`](../../docs/deployment-contracts.md).

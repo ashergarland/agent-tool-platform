@@ -1,0 +1,193 @@
+{
+  "contractVersion": 1,
+  "kind": "capability-profile-declaration",
+  "capability": {
+    "id": "fixture.invalid/safe-capability",
+    "displayName": "Non-live deployment contract fixture",
+    "repository": "https://code.invalid/safe-capability.git"
+  },
+  "profiles": [
+    {
+      "id": "local-package",
+      "description": "Local package execution with no hosted service or external provider.",
+      "dimensions": {
+        "execution": "local",
+        "delivery": "package",
+        "access": "local-process",
+        "workload": "none",
+        "provider": "none",
+        "mutation": "read-only"
+      },
+      "delivery": {
+        "supportedForms": ["package"],
+        "publication": {
+          "kind": "package",
+          "identifier": "@safe-fixture/capability"
+        },
+        "entrypoint": {
+          "reference": "bin/safe-capability.js",
+          "interface": "stdio"
+        },
+        "mechanics": [
+          {
+            "id": "local-stdio",
+            "reference": "docs/local.md#stdio"
+          }
+        ],
+        "provenance": {
+          "method": "package-metadata",
+          "reference": "package.json#repository"
+        }
+      },
+      "configuration": {
+        "schema": {
+          "id": "urn:safe-fixture:local-configuration:v1",
+          "capabilityId": "fixture.invalid/safe-capability",
+          "path": "schemas/local-configuration.schema.json"
+        },
+        "bounded": true
+      },
+      "requiredSecrets": [],
+      "providerPrerequisites": [],
+      "identity": {
+        "trustBoundary": "Invoking local user and its operating-system permissions.",
+        "rbac": []
+      },
+      "extensionSchemas": [
+        {
+          "id": "urn:safe-fixture:deployment-extension:v1",
+          "capabilityId": "fixture.invalid/safe-capability",
+          "path": "schemas/deployment-extension.schema.json"
+        }
+      ],
+      "verification": {
+        "surfaces": ["behavior", "provenance", "version"]
+      }
+    },
+    {
+      "id": "hosted-provider",
+      "description": "Authenticated hosted execution against a non-live external provider fixture.",
+      "dimensions": {
+        "execution": "hosted",
+        "delivery": "container",
+        "access": "authenticated-service",
+        "workload": "none",
+        "provider": "external",
+        "mutation": "read-only"
+      },
+      "delivery": {
+        "supportedForms": ["container"],
+        "publication": {
+          "kind": "container",
+          "identifier": "registry.invalid/safe-fixture/capability"
+        },
+        "entrypoint": {
+          "reference": "dist/hosted-entry.js",
+          "interface": "http"
+        },
+        "mechanics": [
+          {
+            "id": "hosted-runtime",
+            "reference": "docs/hosted.md#runtime"
+          }
+        ],
+        "provenance": {
+          "method": "source-attestation",
+          "reference": "docs/provenance.md#container"
+        }
+      },
+      "configuration": {
+        "schema": {
+          "id": "urn:safe-fixture:hosted-configuration:v1",
+          "capabilityId": "fixture.invalid/safe-capability",
+          "path": "schemas/hosted-configuration.schema.json"
+        },
+        "bounded": true
+      },
+      "requiredSecrets": ["safe-fixture-provider-token"],
+      "providerPrerequisites": [
+        {
+          "id": "fixture-api-enabled",
+          "description": "The non-live fixture provider API is enabled."
+        }
+      ],
+      "identity": {
+        "trustBoundary": "Authenticated service identity for the non-live fixture.",
+        "rbac": ["Read non-live fixture provider records."]
+      },
+      "extensionSchemas": [],
+      "verification": {
+        "surfaces": ["identity", "readiness", "version", "behavior", "provider", "provenance"]
+      }
+    },
+    {
+      "id": "filesystem-data",
+      "description": "Local source build with an explicit filesystem workload contract.",
+      "dimensions": {
+        "execution": "local",
+        "delivery": "source",
+        "access": "local-process",
+        "workload": "filesystem",
+        "provider": "none",
+        "mutation": "read-only"
+      },
+      "delivery": {
+        "supportedForms": ["source"],
+        "publication": {
+          "kind": "source",
+          "buildReference": "scripts/build-safe-package.mjs"
+        },
+        "entrypoint": {
+          "reference": "dist/filesystem-entry.js",
+          "interface": "stdio"
+        },
+        "mechanics": [
+          {
+            "id": "local-filesystem",
+            "reference": "docs/filesystem.md#local"
+          }
+        ],
+        "provenance": {
+          "method": "build-recipe",
+          "reference": "scripts/build-safe-package.mjs"
+        }
+      },
+      "configuration": {
+        "schema": {
+          "id": "urn:safe-fixture:filesystem-configuration:v1",
+          "capabilityId": "fixture.invalid/safe-capability",
+          "path": "schemas/filesystem-configuration.schema.json"
+        },
+        "bounded": true
+      },
+      "requiredSecrets": [],
+      "providerPrerequisites": [],
+      "identity": {
+        "trustBoundary": "Invoking local user with access limited to the selected fixture root.",
+        "rbac": []
+      },
+      "workload": {
+        "interface": {
+          "kind": "filesystem",
+          "reference": "docs/filesystem.md#data-interface"
+        },
+        "authorization": {
+          "scope": "Read only beneath the explicitly selected fixture root."
+        },
+        "lifecycle": {
+          "mode": "session",
+          "freshness": "Rescan at the start of each non-live fixture session.",
+          "cleanup": "Release file handles when the fixture session ends."
+        },
+        "notReady": {
+          "whenAbsent": "not-ready",
+          "reason": "Report deterministic not-ready state until the selected root exists."
+        }
+      },
+      "extensionSchemas": [],
+      "verification": {
+        "surfaces": ["readiness", "behavior", "provenance"]
+      }
+    }
+  ]
+}
