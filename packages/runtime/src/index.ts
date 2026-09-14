@@ -17,6 +17,7 @@ export * from './capability/index.js';
 export * from './concurrency/index.js';
 export * from './config/index.js';
 export * from './context/index.js';
+export * from './deployment/index.js';
 export * from './fs/index.js';
 export * from './http/index.js';
 export * from './lifecycle/index.js';

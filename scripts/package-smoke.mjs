@@ -75,6 +75,9 @@ const documentedExports = {
       'MutationGate',
       'noopTelemetrySink',
       'assertCapabilityMetadata',
+      'assertDeploymentContract',
+      'capabilityProfileDeclarationJsonSchema',
+      'deploymentInstanceJsonSchema',
     ],
     './capability': [
       'createAgentToolApplication',
@@ -83,6 +86,13 @@ const documentedExports = {
     ],
     './lifecycle': ['ApplicationLifecycle', 'installShutdownSignalHandlers'],
     './mcp': ['createMcpServer', 'createStdioMcpServer', 'connectStdio'],
+    './deployment': [
+      'CANONICAL_CAPABILITY_DECLARATION_PATH',
+      'assertDeploymentContract',
+      'capabilityProfileDeclarationJsonSchema',
+      'deploymentInstanceJsonSchema',
+      'validateDeploymentContract',
+    ],
   },
   '@agent-tool-platform/testkit': {
     '.': [
@@ -99,7 +109,9 @@ const documentedExports = {
       'runScratchWorkspaceConformance',
       'runProcessConformance',
       'runMetadataConformance',
+      'runDeploymentContractConformance',
     ],
+    './deployment': ['runDeploymentContractConformance'],
   },
 };
 
@@ -112,6 +124,11 @@ const runtimeBinary = {
   name: 'agent-tool-validate-metadata',
   target: 'bin/validate-metadata.js',
 };
+const deploymentBinary = {
+  name: 'agent-tool-validate-deployment',
+  target: 'bin/validate-deployment.js',
+};
+const runtimeBinaries = [runtimeBinary, deploymentBinary];
 
 /**
  * What a consumer must receive, and what a consumer must never receive. Maps are forbidden because
@@ -123,6 +140,10 @@ const runtimeBinary = {
  * automatic inclusion of a root-level LICENSE is a convenience, not a guarantee worth relying on.
  */
 const requiredFiles = ['package.json', 'README.md', 'LICENSE', 'dist/index.js', 'dist/index.d.ts'];
+const runtimeSchemaFiles = [
+  'schemas/deployment/v1/capability-profile-declaration.schema.json',
+  'schemas/deployment/v1/deployment-instance.schema.json',
+];
 const forbidden = [
   [/^src\//u, 'TypeScript sources'],
   [/\.map$/u, 'source or declaration maps that would point at unpublished sources'],
@@ -135,7 +156,12 @@ const forbidden = [
   ],
   [/(^|\/)\.(env|npmrc|gitignore|gitattributes)$/u, 'local tooling or secrets-adjacent files'],
 ];
-const allowedRoots = [/^dist\//u, /^bin\//u, /^(package\.json|README\.md|LICENSE)$/u];
+const allowedRoots = [
+  /^dist\//u,
+  /^bin\//u,
+  /^schemas\//u,
+  /^(package\.json|README\.md|LICENSE)$/u,
+];
 
 const collectExportTargets = (exportsField, targets = []) => {
   if (typeof exportsField === 'string') {
@@ -149,7 +175,9 @@ const collectExportTargets = (exportsField, targets = []) => {
 };
 
 const documentedSubpaths = (manifest) =>
-  Object.keys(manifest.exports ?? {}).filter((subpath) => subpath !== './package.json');
+  Object.keys(manifest.exports ?? {}).filter(
+    (subpath) => subpath !== './package.json' && !subpath.endsWith('.json'),
+  );
 
 const linkFromWorkspace = (consumerModules, name) => {
   const source = join(workspaceModules, ...name.split('/'));
@@ -369,7 +397,7 @@ const exerciseConsumer = (consumer, packed) => {
   }
 };
 
-const exerciseRuntimeBinary = (artefact) => {
+const exerciseRuntimeBinaries = (artefact) => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'atp-runtime-cli-'));
   writeFileSync(
     join(root, 'package.json'),
@@ -432,9 +460,34 @@ const exerciseRuntimeBinary = (artefact) => {
     } else {
       note(`${runtimeBinary.name}: npm-installed command validated representative metadata`);
     }
+
+    const deploymentOutput = npmCommand(
+      [
+        'exec',
+        '--offline',
+        '--',
+        deploymentBinary.name,
+        '--declaration',
+        join(repositoryRoot, 'tests', 'fixtures', 'deployment', 'capability-profiles.json'),
+        '--instance',
+        join(repositoryRoot, 'tests', 'fixtures', 'deployment', 'hosted-provider.deployment.json'),
+      ],
+      { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    if (
+      !deploymentOutput.includes(
+        'Capability profile declaration and deployment instance are valid.',
+      )
+    ) {
+      fail(
+        `${deploymentBinary.name}: installed command produced unexpected output: ${deploymentOutput.trim()}`,
+      );
+    } else {
+      note(`${deploymentBinary.name}: npm-installed command cross-validated safe fixtures`);
+    }
   } catch (error) {
     fail(
-      `${runtimeBinary.name}: npm could not install and execute the packed command:\n${
+      `runtime commands: npm could not install and execute the packed commands:\n${
         error.stderr || error.stdout || error.message
       }`,
     );
@@ -468,7 +521,11 @@ try {
     packed[name] = artefact;
     const shipped = new Set(artefact.files);
 
-    for (const required of requiredFiles) {
+    const packageRequiredFiles =
+      name === '@agent-tool-platform/runtime'
+        ? [...requiredFiles, ...runtimeSchemaFiles]
+        : requiredFiles;
+    for (const required of packageRequiredFiles) {
       if (!shipped.has(required)) fail(`${name}: does not ship the required file ${required}`);
     }
     for (const target of collectExportTargets(manifest.exports)) {
@@ -491,7 +548,9 @@ try {
     }
     for (const file of artefact.files) {
       if (!allowedRoots.some((pattern) => pattern.test(file))) {
-        fail(`${name}: ships ${file}, which is outside dist/, bin/, and the package documentation`);
+        fail(
+          `${name}: ships ${file}, which is outside dist/, bin/, schemas/, and package documentation`,
+        );
       }
     }
 
@@ -501,18 +560,27 @@ try {
 
     if (name === '@agent-tool-platform/runtime') {
       const packedManifest = readManifest(join(extracted, 'package.json'));
-      const binTarget = packedManifest.bin?.[runtimeBinary.name];
-      if (binTarget !== runtimeBinary.target) {
-        fail(
-          `${name}: packed manifest bin.${runtimeBinary.name} must be ${runtimeBinary.target}, ` +
-            `found ${binTarget === undefined ? 'no mapping' : JSON.stringify(binTarget)}`,
-        );
-      } else {
-        const executable = join(extracted, binTarget);
-        if (!shipped.has(binTarget) || !existsSync(executable)) {
-          fail(`${name}: packed bin target ${binTarget} does not exist in the tarball`);
-        } else if (!readFileSync(executable, 'utf8').startsWith('#!/usr/bin/env node\n')) {
-          fail(`${name}: packed bin target ${binTarget} does not begin with the Node shebang`);
+      for (const binary of runtimeBinaries) {
+        const binTarget = packedManifest.bin?.[binary.name];
+        if (binTarget !== binary.target) {
+          fail(
+            `${name}: packed manifest bin.${binary.name} must be ${binary.target}, ` +
+              `found ${binTarget === undefined ? 'no mapping' : JSON.stringify(binTarget)}`,
+          );
+        } else {
+          const executable = join(extracted, binTarget);
+          if (!shipped.has(binTarget) || !existsSync(executable)) {
+            fail(`${name}: packed bin target ${binTarget} does not exist in the tarball`);
+          } else if (!readFileSync(executable, 'utf8').startsWith('#!/usr/bin/env node\n')) {
+            fail(`${name}: packed bin target ${binTarget} does not begin with the Node shebang`);
+          }
+        }
+      }
+
+      for (const schemaFile of runtimeSchemaFiles) {
+        const schema = readManifest(join(extracted, schemaFile));
+        if (schema.$schema !== 'https://json-schema.org/draft/2020-12/schema') {
+          fail(`${name}: ${schemaFile} is not a Draft 2020-12 JSON Schema`);
         }
       }
     }
@@ -539,7 +607,7 @@ try {
   }
 
   if (failures.length === 0) {
-    consumers.push(exerciseRuntimeBinary(packed['@agent-tool-platform/runtime']));
+    consumers.push(exerciseRuntimeBinaries(packed['@agent-tool-platform/runtime']));
 
     // Runtime must stand alone. Testkit must consume the packed runtime, not the workspace one.
     const runtimeOnly = { '@agent-tool-platform/runtime': packed['@agent-tool-platform/runtime'] };
@@ -577,6 +645,6 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    'Publication smoke test passed: both tarballs ship only intended files, install outside the workspace, expose every documented export, and type-check for an external TypeScript consumer.\n',
+    'Publication smoke test passed: both tarballs ship only intended files, deployment schemas and commands work from the packed runtime, every documented export loads, and declarations type-check for an external TypeScript consumer.\n',
   );
 }

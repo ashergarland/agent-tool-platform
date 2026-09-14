@@ -1,0 +1,111 @@
+{
+  "contractVersion": 1,
+  "kind": "deployment-instance",
+  "capability": {
+    "id": "fixture.invalid/safe-capability"
+  },
+  "environment": {
+    "name": "fixture-local",
+    "classification": "test"
+  },
+  "profile": {
+    "id": "local-package",
+    "dimensions": {
+      "execution": "local",
+      "delivery": "package",
+      "access": "local-process",
+      "workload": "none",
+      "provider": "none",
+      "mutation": "read-only"
+    }
+  },
+  "declaration": {
+    "repository": "https://code.invalid/safe-capability.git",
+    "revision": "1111111111111111111111111111111111111111",
+    "path": "capability-profiles.json"
+  },
+  "source": {
+    "repository": "https://code.invalid/safe-capability.git",
+    "revision": "2222222222222222222222222222222222222222",
+    "path": "."
+  },
+  "artifact": {
+    "kind": "package",
+    "registry": "https://registry.invalid",
+    "identifier": "@safe-fixture/capability",
+    "version": "1.2.3",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sourceBinding": {
+      "revision": "2222222222222222222222222222222222222222",
+      "method": "package-metadata",
+      "reference": "package.json#repository"
+    }
+  },
+  "deployment": {
+    "entrypoint": {
+      "reference": "bin/safe-capability.js",
+      "arguments": ["--stdio"]
+    },
+    "parameters": {
+      "reference": "operator-git:fixtures/local/parameters.json",
+      "schemaId": "urn:safe-fixture:local-configuration:v1"
+    },
+    "localTrust": {
+      "boundary": "Invoking local user and its operating-system permissions.",
+      "provenanceVerification": {
+        "method": "digest",
+        "reference": "artifact.digest"
+      }
+    }
+  },
+  "secrets": {
+    "provider": {
+      "kind": "none"
+    },
+    "references": []
+  },
+  "prerequisites": {
+    "provider": [],
+    "registrations": []
+  },
+  "verification": {
+    "identity": [],
+    "readiness": [],
+    "version": [
+      {
+        "id": "package-version",
+        "expectation": "The package reports the pinned non-live fixture version."
+      }
+    ],
+    "behavior": [
+      {
+        "id": "local-behavior",
+        "expectation": "The local fixture responds over stdio without binding a listener."
+      }
+    ],
+    "provider": [],
+    "provenance": [
+      {
+        "id": "package-provenance",
+        "expectation": "The package digest and source binding match desired state."
+      }
+    ]
+  },
+  "rollback": {
+    "kind": "operator-strategy",
+    "reference": "operator-runbook:fixtures/local-rollback",
+    "description": "Restore the previously reviewed package pin."
+  },
+  "extensions": [
+    {
+      "schema": {
+        "id": "urn:safe-fixture:deployment-extension:v1",
+        "capabilityId": "fixture.invalid/safe-capability",
+        "path": "schemas/deployment-extension.schema.json"
+      },
+      "parameters": {
+        "mode": "fixture"
+      }
+    }
+  ]
+}

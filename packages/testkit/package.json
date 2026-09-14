@@ -43,6 +43,10 @@
       "types": "./dist/config.d.ts",
       "import": "./dist/config.js"
     },
+    "./deployment": {
+      "types": "./dist/deployment/index.d.ts",
+      "import": "./dist/deployment/index.js"
+    },
     "./lifecycle": {
       "types": "./dist/lifecycle.d.ts",
       "import": "./dist/lifecycle.js"

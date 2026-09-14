@@ -609,7 +609,8 @@ it('satisfies platform registry conformance', async () => {
 Available suites: `runRegistryConformance`, `runRoutingConformance`, `runHttpConformance`,
 `runMcpConformance`, `runOpenApiConformance`, `runTransportParity`, `runAuthConformance`,
 `runConfigConformance`, `runLifecycleConformance`, `runRootBoundaryConformance`,
-`runScratchWorkspaceConformance`, `runProcessConformance`, `runMetadataConformance`.
+`runScratchWorkspaceConformance`, `runProcessConformance`, `runMetadataConformance`,
+`runDeploymentContractConformance`.
 
 The testkit imports no test runner, so each suite runs inside whichever `it(...)` a capability
 already uses. Every suite tests **platform** invariants only; domain behaviour stays in the
@@ -620,6 +621,25 @@ Metadata validation is also available as a binary for capability repositories:
 ```bash
 npx agent-tool-validate-metadata --server server.json --package package.json
 ```
+
+---
+
+## Deployment contracts
+
+Contract v1 links an account-neutral public `capability-profiles.json` declaration to a private,
+non-secret desired `deployment-instance`. The shared offline validator enforces immutable
+declaration/source/artifact pins, all six profile dimensions, conditional provider/workload/mutation
+requirements, rollback intent, capability-owned extension references, and separation from observed
+evidence:
+
+```bash
+node packages/runtime/bin/validate-deployment.js \
+  --declaration capability-profiles.json \
+  --instance deployment-instance.json
+```
+
+See [`docs/deployment-contracts.md`](docs/deployment-contracts.md) for the document ownership,
+canonical discovery rule, JSON Schema and runtime exports, source-checkout flow, and testkit usage.
 
 ---
 
