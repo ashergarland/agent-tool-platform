@@ -1,0 +1,148 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+  "schemaVersion": "1.0.0",
+  "kind": "capability",
+  "id": "azure",
+  "displayName": "Azure Agent Tool Server",
+  "description": "Inspect, diagnose, operate and deploy Azure through a guard-railed control plane",
+  "publisher": {
+    "id": "ashergarland",
+    "displayName": "Asher Garland",
+    "url": "https://github.com/ashergarland"
+  },
+  "version": {
+    "value": "0.2.0",
+    "status": "declared"
+  },
+  "artifacts": [
+    {
+      "id": "oci-container",
+      "kind": "oci",
+      "identifier": "ghcr.io/ashergarland/agent-tool-server-azure",
+      "version": "0.2.0",
+      "availability": "declared",
+      "reference": "server.json#/packages/0"
+    }
+  ],
+  "links": {
+    "repository": "https://github.com/ashergarland/agent-tool-server-azure",
+    "documentation": "https://github.com/ashergarland/agent-tool-server-azure#readme"
+  },
+  "category": {
+    "id": "cloud",
+    "displayName": "Cloud"
+  },
+  "tags": ["azure", "cloud", "diagnostics", "infrastructure", "operations"],
+  "toolCount": 18,
+  "profiles": [
+    {
+      "id": "hosted-mutating",
+      "description": "Authenticated hosted Azure operations with separately enabled mutations, previews, confirmation, scoped RBAC, and provider verification.",
+      "source": "capability-profile-declaration",
+      "dimensions": {
+        "execution": "hosted",
+        "delivery": "container",
+        "access": "authenticated-service",
+        "workload": "provider",
+        "provider": "external",
+        "mutation": "mutating"
+      },
+      "permissions": {
+        "summary": "Read Azure state and perform only separately enabled, allow-listed operations within operator-scoped RBAC.",
+        "scopes": ["network-access", "provider-read", "provider-write"]
+      },
+      "prerequisites": {
+        "setupRequired": true,
+        "summary": "Requires an authenticated hosted service, operator-scoped Azure identities, provider registrations, and separately enabled mutation policy.",
+        "requiredSecrets": ["connector-api-key"],
+        "provider": [
+          {
+            "id": "azure-provider-registrations",
+            "description": "Every resource provider required by an authorized operation or Bicep template is registered by the operator."
+          },
+          {
+            "id": "azure-resource-manager",
+            "description": "Azure Resource Manager and Resource Graph are available to the selected managed identity."
+          }
+        ]
+      },
+      "readiness": {
+        "signals": ["process", "provider", "workload"],
+        "summary": "Ready when hosted access, provider authentication, selected mutation RBAC, and deployment prerequisites are usable."
+      },
+      "stateEffects": ["provider-mutation"]
+    },
+    {
+      "id": "hosted-read-only",
+      "description": "Authenticated hosted inspection and diagnosis through an operator-scoped Azure identity.",
+      "source": "capability-profile-declaration",
+      "dimensions": {
+        "execution": "hosted",
+        "delivery": "container",
+        "access": "authenticated-service",
+        "workload": "provider",
+        "provider": "external",
+        "mutation": "read-only"
+      },
+      "permissions": {
+        "summary": "Read Azure state within operator-selected scopes and the managed identity's effective RBAC.",
+        "scopes": ["network-access", "provider-read"]
+      },
+      "prerequisites": {
+        "setupRequired": true,
+        "summary": "Requires an authenticated hosted service, an operator-scoped Azure identity, and required provider registrations.",
+        "requiredSecrets": ["connector-api-key"],
+        "provider": [
+          {
+            "id": "azure-provider-registrations",
+            "description": "Resource providers needed by the resources being inspected are registered by the operator."
+          },
+          {
+            "id": "azure-resource-manager",
+            "description": "Azure Resource Manager and Resource Graph are available to the selected managed identity."
+          }
+        ]
+      },
+      "readiness": {
+        "signals": ["process", "provider", "workload"],
+        "summary": "Ready when hosted access, Azure authentication, a read-only provider query, and configured RBAC checks succeed."
+      },
+      "stateEffects": []
+    }
+  ],
+  "bindings": [
+    {
+      "id": "hosted-mutating-http",
+      "profileId": "hosted-mutating",
+      "artifactId": "oci-container",
+      "interface": "http",
+      "availability": "remote"
+    },
+    {
+      "id": "hosted-read-only-http",
+      "profileId": "hosted-read-only",
+      "artifactId": "oci-container",
+      "interface": "http",
+      "availability": "remote"
+    }
+  ],
+  "stateChanging": true,
+  "routing": {
+    "summary": "Use for Azure inventory, Resource Graph queries, diagnostics, guarded operations, Bicep validation and what-if, deployments, status, and rollback."
+  },
+  "conformance": {
+    "status": "verified",
+    "checks": ["capability-profile-v1", "mcp-metadata", "routing-metadata", "runtime-contract"]
+  },
+  "source": {
+    "capabilityId": "io.github.ashergarland/agent-tool-server-azure",
+    "repository": "https://github.com/ashergarland/agent-tool-server-azure",
+    "revision": "a2ea5bac9162159b4b0b04ce12e80d46a1b9a79c",
+    "metadataVersion": "0.2.0",
+    "metadata": {
+      "server": "server.json",
+      "package": "package.json",
+      "profiles": "capability-profiles.json"
+    }
+  }
+}

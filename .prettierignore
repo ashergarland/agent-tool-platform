@@ -3,4 +3,5 @@ coverage/
 node_modules/
 package-lock.json
 openapi.fixture.json
+packages/capability-registry/data/first-party-registry.json
 *.bicep

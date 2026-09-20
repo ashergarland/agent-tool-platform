@@ -1,0 +1,55 @@
+{
+  "name": "@agent-tool-platform/capability-registry",
+  "version": "0.0.0-development",
+  "description": "Versioned first-party capability metadata, schemas, validation, and lookup APIs for Agent Tool Platform.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "homepage": "https://github.com/ashergarland/agent-tool-platform/tree/main/packages/capability-registry#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ashergarland/agent-tool-platform.git",
+    "directory": "packages/capability-registry"
+  },
+  "bugs": {
+    "url": "https://github.com/ashergarland/agent-tool-platform/issues"
+  },
+  "keywords": [
+    "agent-tools",
+    "capability-registry",
+    "mcp"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./first-party-registry.json": "./data/first-party-registry.json",
+    "./schemas/v1/capability-entry.json": "./schemas/v1/capability-entry.schema.json",
+    "./schemas/v1/capability-registry.json": "./schemas/v1/capability-registry.schema.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "data",
+    "schemas",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "typescript": "5.9.3"
+  }
+}

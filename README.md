@@ -1,12 +1,12 @@
 # agent-tool-platform
 
-Shared runtime, testkit, and infrastructure primitives for the Hosted Agent Tool Servers project.
+Shared runtime, capability registry, testkit, agent composition, and infrastructure primitives for
+the Hosted Agent Tool Servers project.
 
-This repository is **not** a tool server, an agent, or a persona. It contains no domain behaviour:
-no ASTs, no repositories, no Azure resources, no documents, no images. It is the layer every
-`agent-tool-server-*` capability consumes so that authentication, transports, error semantics,
-lifecycle, safety primitives, and routing grammar are implemented once and behave identically
-everywhere.
+This repository is **not** a tool server, a concrete agent, or a persona. It contains no domain
+behaviour: no ASTs, no repositories, no Azure resources, no documents, no images. It owns shared
+capability mechanics and the host-neutral composition layer so capabilities and agents can reuse
+contracts without duplicating runtimes or host-specific state.
 
 > **Status: v0 foundation.** Runtime and testkit 0.1.0 are publicly available from npm. No
 > infrastructure has been deployed. Future versions are published only from intentional release
@@ -65,9 +65,9 @@ flowchart TD
 
 | Layer      | Repositories          | Owns                                                                                                           |
 | ---------- | --------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Platform   | `agent-tool-platform` | Transports, contracts, safety primitives, conformance suites, shared Bicep.                                    |
+| Platform   | `agent-tool-platform` | Transports, contracts, safety primitives, conformance suites, composition mechanics, shared Bicep.             |
 | Capability | `agent-tool-server-*` | Domain tools, services, schemas, routing content, safety policy, provider integrations, domain infrastructure. |
-| Agent      | `agent-*`             | Capability selection, cross-capability workflows, routing policy, client packaging, agent-level telemetry.     |
+| Agent      | Product repositories  | Canonical definitions, capability selection, cross-capability policy, and product-specific evaluation.         |
 
 Two rules follow from this and are worth stating plainly:
 
@@ -83,21 +83,28 @@ contracts. There is no central proxy and no combined server.
 
 ## Packages
 
-| Package                                                      | Purpose                                                                               |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| [`@agent-tool-platform/runtime`](packages/runtime)           | The shared implementation a capability consumes at runtime.                           |
-| [`@agent-tool-platform/testkit`](packages/testkit)           | Reusable conformance suites that prove a capability satisfies the platform contracts. |
-| [`examples/minimal-capability`](examples/minimal-capability) | A private fixture used only to prove the platform. Never published, never a product.  |
+| Package                                                                    | Purpose                                                                               |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [`@agent-tool-platform/runtime`](packages/runtime)                         | The shared implementation a capability consumes at runtime.                           |
+| [`@agent-tool-platform/testkit`](packages/testkit)                         | Reusable conformance suites that prove a capability satisfies the platform contracts. |
+| [`@agent-tool-platform/capability-registry`](packages/capability-registry) | Versioned first-party capability metadata, validation, and lookup APIs.               |
+| [`@agent-tool-platform/agent-kit`](packages/agent-kit)                     | Host-neutral agent resolution, locks, readiness plans, and generated host adapters.   |
+| [`examples/minimal-capability`](examples/minimal-capability)               | A private fixture used only to prove the platform. Never published, never a product.  |
 
 The package count is small on purpose. Auth, routing, telemetry, errors, and process handling are
 modules inside `runtime`, not separate packages: splitting them would buy version skew and nothing
 else.
 
-`testkit` may depend on `runtime`. `runtime` must never depend on `testkit`.
+`testkit` and `agent-kit` may depend on `runtime`; `runtime` must not depend on either package. The
+registry is a standalone sibling package whose execution-dimension vocabulary is regression-checked
+against the runtime deployment contract. Agent Kit consumes the registry through its public reader;
+`capability-registry` must never depend on Agent Kit.
 
 ### Installation
 
-Both packages are public and scoped to `@agent-tool-platform` on the primary npm registry.
+Runtime and testkit are public and scoped to `@agent-tool-platform` on the primary npm registry.
+Capability Registry and Agent Kit remain checked-in private workspace packages for this
+implementation slice.
 
 ```bash
 # production capability dependency
@@ -663,6 +670,7 @@ npm install
 npm run typecheck
 npm run test:coverage
 npm run build
+npm run registry:validate
 npm run package:smoke
 npm run release:check
 npm run openapi:emit
@@ -715,7 +723,7 @@ This repository deliberately does **not**:
 - migrate AST Summarizer or any other capability,
 - modify `agent-tool-server-template` or any sibling repository,
 - create `agent-developer-optimization` or any agent repository,
-- create agent manifest or lockfile tooling,
+- create a concrete agent product, composition template, or management UI,
 - implement a telemetry backend, Application Insights, or Log Analytics provisioning,
 - publish unreleased development snapshots or publish merely because a pull request merges,
 - deploy infrastructure,

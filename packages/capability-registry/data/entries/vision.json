@@ -1,0 +1,141 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+  "schemaVersion": "1.0.0",
+  "kind": "capability",
+  "id": "vision",
+  "displayName": "Vision",
+  "description": "Bounded image and OCR analysis through a thin Agent Tool Platform capability and capability-owned Python worker.",
+  "publisher": {
+    "id": "ashergarland",
+    "displayName": "Asher Garland",
+    "url": "https://github.com/ashergarland"
+  },
+  "version": {
+    "value": "0.0.0-development",
+    "status": "development"
+  },
+  "artifacts": [
+    {
+      "id": "npm-package",
+      "kind": "npm",
+      "identifier": "agent-tool-server-vision",
+      "version": "0.0.0-development",
+      "availability": "declared",
+      "reference": "server.json#/packages/0"
+    }
+  ],
+  "links": {
+    "repository": "https://github.com/ashergarland/agent-tool-server-vision",
+    "documentation": "https://github.com/ashergarland/agent-tool-server-vision#readme"
+  },
+  "category": {
+    "id": "media",
+    "displayName": "Media"
+  },
+  "tags": ["artifacts", "context-optimization", "images", "ocr", "vision"],
+  "toolCount": 4,
+  "profiles": [
+    {
+      "id": "hybrid-azure-package",
+      "description": "Local stdio execution with bounded filesystem images and explicitly configured Azure Content Understanding OCR.",
+      "source": "capability-profile-declaration",
+      "dimensions": {
+        "execution": "local",
+        "delivery": "package",
+        "access": "local-process",
+        "workload": "filesystem",
+        "provider": "external",
+        "mutation": "mutating"
+      },
+      "permissions": {
+        "summary": "Read allowed local images, execute the capability-owned worker, call Azure OCR, and create principal-scoped artifacts.",
+        "scopes": [
+          "artifact-write",
+          "filesystem-read",
+          "network-access",
+          "process-execute",
+          "provider-read"
+        ]
+      },
+      "prerequisites": {
+        "setupRequired": true,
+        "summary": "Requires allowed image roots, the Python image worker, and an explicitly configured Azure Content Understanding identity.",
+        "requiredSecrets": ["AZURE_CLIENT_SECRET"],
+        "provider": [
+          {
+            "id": "azure-content-understanding",
+            "description": "An HTTPS Azure AI Content Understanding endpoint and an Entra application authorized only for analysis."
+          }
+        ]
+      },
+      "readiness": {
+        "signals": ["process", "provider", "workload"],
+        "summary": "Ready when local roots and worker dependencies are usable and provider authentication succeeds."
+      },
+      "stateEffects": ["artifact-create"]
+    },
+    {
+      "id": "local-package",
+      "description": "Local stdio execution over explicitly allowed image roots with deterministic image operations and local OCR.",
+      "source": "capability-profile-declaration",
+      "dimensions": {
+        "execution": "local",
+        "delivery": "package",
+        "access": "local-process",
+        "workload": "filesystem",
+        "provider": "none",
+        "mutation": "mutating"
+      },
+      "permissions": {
+        "summary": "Read allowed local images, execute the capability-owned worker, and create principal-scoped artifacts.",
+        "scopes": ["artifact-write", "filesystem-read", "process-execute"]
+      },
+      "prerequisites": {
+        "setupRequired": true,
+        "summary": "Requires allowed image roots and the local Python image worker; no provider or secret setup is required.",
+        "requiredSecrets": [],
+        "provider": []
+      },
+      "readiness": {
+        "signals": ["process", "workload"],
+        "summary": "Ready when an allowed image root and the required Python image dependencies are available."
+      },
+      "stateEffects": ["artifact-create"]
+    }
+  ],
+  "bindings": [
+    {
+      "id": "hybrid-azure-stdio",
+      "profileId": "hybrid-azure-package",
+      "artifactId": "npm-package",
+      "interface": "stdio",
+      "availability": "hybrid"
+    },
+    {
+      "id": "local-stdio",
+      "profileId": "local-package",
+      "artifactId": "npm-package",
+      "interface": "stdio",
+      "availability": "local"
+    }
+  ],
+  "stateChanging": true,
+  "routing": {
+    "summary": "Use for bounded image analysis, OCR and layout extraction, image comparison, and optimized image-region artifacts."
+  },
+  "conformance": {
+    "status": "verified",
+    "checks": ["capability-profile-v1", "mcp-metadata", "routing-metadata", "runtime-contract"]
+  },
+  "source": {
+    "capabilityId": "io.github.ashergarland/agent-tool-server-vision",
+    "repository": "https://github.com/ashergarland/agent-tool-server-vision",
+    "revision": "833d97c76d92ca833650d826fb1348090df1d5a8",
+    "metadataVersion": "0.0.0-development",
+    "metadata": {
+      "server": "server.json",
+      "package": "package.json",
+      "profiles": "capability-profiles.json"
+    }
+  }
+}

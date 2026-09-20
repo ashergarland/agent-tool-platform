@@ -47,12 +47,16 @@ const readManifest = (relativePath: string): PackageManifest =>
 
 const runtimeName = '@agent-tool-platform/runtime';
 const testkitName = '@agent-tool-platform/testkit';
+const agentKitName = '@agent-tool-platform/agent-kit';
+const capabilityRegistryName = '@agent-tool-platform/capability-registry';
 const developmentVersion = '0.0.0-development';
 const expectedVersion = process.env.RELEASE_VERSION ?? developmentVersion;
 const gitUrl = 'git+https://github.com/ashergarland/agent-tool-platform.git';
 
 const runtime = readManifest('packages/runtime/package.json');
 const testkit = readManifest('packages/testkit/package.json');
+const agentKit = readManifest('packages/agent-kit/package.json');
+const capabilityRegistry = readManifest('packages/capability-registry/package.json');
 const root = readManifest('package.json');
 
 describe('publishable package metadata', () => {
@@ -104,6 +108,7 @@ describe('publishable package metadata', () => {
 
   it('depends on the exact runtime version rather than a range or a local protocol', () => {
     expect(testkit.dependencies?.[runtimeName]).toBe(runtime.version);
+    expect(agentKit.dependencies?.[runtimeName]).toBe(runtime.version);
   });
 
   it.each(publishable)('%s declares only registry-resolvable dependencies', (_l, manifest) => {
@@ -115,11 +120,23 @@ describe('publishable package metadata', () => {
   it('keeps the dependency pointing one way only', () => {
     expect(runtime.dependencies?.[testkitName]).toBeUndefined();
     expect(runtime.devDependencies?.[testkitName]).toBeUndefined();
+    expect(runtime.dependencies?.[agentKitName]).toBeUndefined();
+    expect(runtime.devDependencies?.[agentKitName]).toBeUndefined();
     expect(testkit.dependencies?.[runtimeName]).toBeDefined();
+    expect(agentKit.dependencies?.[runtimeName]).toBeDefined();
+    expect(agentKit.dependencies?.[capabilityRegistryName]).toBe(capabilityRegistry.version);
+    expect(capabilityRegistry.dependencies?.[agentKitName]).toBeUndefined();
+    expect(capabilityRegistry.devDependencies?.[agentKitName]).toBeUndefined();
   });
 
-  it('keeps the repository root and the example fixture unpublishable', () => {
+  it('keeps the repository root, composition packages, and example fixture unpublishable', () => {
     expect(root.private).toBe(true);
+    expect(agentKit.private).toBe(true);
+    expect(agentKit.name).toBe(agentKitName);
+    expect(agentKit.version).toBe(runtime.version);
+    expect(capabilityRegistry.private).toBe(true);
+    expect(capabilityRegistry.name).toBe(capabilityRegistryName);
+    expect(capabilityRegistry.version).toBe(runtime.version);
     expect(readManifest('examples/minimal-capability/package.json').private).toBe(true);
   });
 

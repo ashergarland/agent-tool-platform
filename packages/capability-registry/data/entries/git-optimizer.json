@@ -1,0 +1,95 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+  "schemaVersion": "1.0.0",
+  "kind": "capability",
+  "id": "git-optimizer",
+  "displayName": "Git Optimizer",
+  "description": "Read-only, bounded Git change summaries for local coding agents.",
+  "publisher": {
+    "id": "ashergarland",
+    "displayName": "Asher Garland",
+    "url": "https://github.com/ashergarland"
+  },
+  "version": {
+    "value": "0.1.0",
+    "status": "declared"
+  },
+  "artifacts": [
+    {
+      "id": "npm-package",
+      "kind": "npm",
+      "identifier": "agent-tool-server-git-optimizer",
+      "version": "0.1.0",
+      "availability": "declared",
+      "reference": "server.json#/packages/0"
+    }
+  ],
+  "links": {
+    "repository": "https://github.com/ashergarland/agent-tool-server-git-optimizer",
+    "documentation": "https://github.com/ashergarland/agent-tool-server-git-optimizer#readme"
+  },
+  "category": {
+    "id": "development",
+    "displayName": "Development"
+  },
+  "tags": ["context-optimization", "diff", "git", "source-control"],
+  "toolCount": 1,
+  "profiles": [
+    {
+      "id": "local-package",
+      "description": "Read-only local Git change analysis over repositories already accessible to the invoking user.",
+      "source": "capability-profile-declaration",
+      "dimensions": {
+        "execution": "local",
+        "delivery": "package",
+        "access": "local-process",
+        "workload": "filesystem",
+        "provider": "none",
+        "mutation": "read-only"
+      },
+      "permissions": {
+        "summary": "Run read-only Git operations within explicitly allowed local repository roots.",
+        "scopes": ["process-execute", "repository-read"]
+      },
+      "prerequisites": {
+        "setupRequired": true,
+        "summary": "Requires Git and at least one readable local repository root; no provider or secret setup is required.",
+        "requiredSecrets": [],
+        "provider": []
+      },
+      "readiness": {
+        "signals": ["process", "workload"],
+        "summary": "Ready when Git is available and a configured repository root is readable."
+      },
+      "stateEffects": []
+    }
+  ],
+  "bindings": [
+    {
+      "id": "local-stdio",
+      "profileId": "local-package",
+      "artifactId": "npm-package",
+      "interface": "stdio",
+      "availability": "local"
+    }
+  ],
+  "stateChanging": false,
+  "routing": {
+    "summary": "Use for bounded summaries of changed files, symbols, configuration keys, and routes between two local Git commits."
+  },
+  "conformance": {
+    "status": "verified",
+    "checks": ["capability-profile-v1", "mcp-metadata", "routing-metadata", "runtime-contract"]
+  },
+  "source": {
+    "capabilityId": "io.github.ashergarland/agent-tool-server-git-optimizer",
+    "repository": "https://github.com/ashergarland/agent-tool-server-git-optimizer",
+    "revision": "6fe83371af641fdbaea1e22c0c8bf981caa882ab",
+    "metadataVersion": "0.1.0",
+    "metadata": {
+      "server": "server.json",
+      "package": "package.json",
+      "profiles": "capability-profiles.json"
+    }
+  }
+}

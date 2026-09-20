@@ -18,6 +18,8 @@ const repositoryRoot = resolve(import.meta.dirname, '..');
 const repositoryUrl = 'https://github.com/ashergarland/agent-tool-platform';
 const gitUrl = `git+${repositoryUrl}.git`;
 const npmRegistry = 'https://registry.npmjs.org';
+const agentKitName = '@agent-tool-platform/agent-kit';
+const capabilityRegistryName = '@agent-tool-platform/capability-registry';
 const runtimeName = '@agent-tool-platform/runtime';
 const testkitName = '@agent-tool-platform/testkit';
 const developmentVersion = '0.0.0-development';
@@ -45,6 +47,8 @@ const fail = (message) => failures.push(message);
 const read = (relativePath) => JSON.parse(readFileSync(join(repositoryRoot, relativePath), 'utf8'));
 
 const root = read('package.json');
+const agentKit = read('packages/agent-kit/package.json');
+const capabilityRegistry = read('packages/capability-registry/package.json');
 const fixture = read('examples/minimal-capability/package.json');
 const publishable = [
   { name: runtimeName, directory: 'packages/runtime' },
@@ -102,6 +106,8 @@ const requiredVersion = expectedVersion ?? developmentVersion;
 
 for (const [label, manifest] of [
   ['package.json', root],
+  ['packages/agent-kit/package.json', agentKit],
+  ['packages/capability-registry/package.json', capabilityRegistry],
   ['packages/runtime/package.json', runtime],
   ['packages/testkit/package.json', testkit],
   ['examples/minimal-capability/package.json', fixture],
@@ -137,14 +143,41 @@ if (fixture.dependencies?.[runtimeName] !== runtime.version) {
     } but the workspace runtime is ${runtime.version}`,
   );
 }
+if (agentKit.dependencies?.[runtimeName] !== runtime.version) {
+  fail(
+    `${agentKitName} depends on ${runtimeName}@${
+      agentKit.dependencies?.[runtimeName] ?? '(missing)'
+    } but the workspace runtime is ${runtime.version}`,
+  );
+}
+if (agentKit.dependencies?.[capabilityRegistryName] !== capabilityRegistry.version) {
+  fail(
+    `${agentKitName} depends on ${capabilityRegistryName}@${
+      agentKit.dependencies?.[capabilityRegistryName] ?? '(missing)'
+    } but the workspace registry is ${capabilityRegistry.version}`,
+  );
+}
+if (
+  capabilityRegistry.dependencies?.[agentKitName] ||
+  capabilityRegistry.devDependencies?.[agentKitName]
+) {
+  fail(`${capabilityRegistryName} must never depend on ${agentKitName}`);
+}
 
-if (runtime.dependencies?.[testkitName] || runtime.devDependencies?.[testkitName]) {
-  fail(`${runtimeName} must never depend on ${testkitName}`);
+if (
+  runtime.dependencies?.[testkitName] ||
+  runtime.devDependencies?.[testkitName] ||
+  runtime.dependencies?.[agentKitName] ||
+  runtime.devDependencies?.[agentKitName]
+) {
+  fail(`${runtimeName} must never depend on ${testkitName} or ${agentKitName}`);
 }
 
 // The repository itself and its fixtures stay unpublishable.
 for (const [path, manifest] of [
   ['package.json', root],
+  ['packages/agent-kit/package.json', agentKit],
+  ['packages/capability-registry/package.json', capabilityRegistry],
   ['examples/minimal-capability/package.json', fixture],
 ]) {
   if (manifest.private !== true) fail(`${path}: must remain private; it is not a product`);
@@ -158,6 +191,8 @@ if (failures.length > 0) {
     `${expectedVersion ? 'Release' : 'Development'} check passed for ${runtime.version}:\n` +
       `- ${runtimeName}@${runtime.version} -> public on ${npmRegistry}\n` +
       `- ${testkitName}@${testkit.version} -> public on ${npmRegistry}, depending on ${runtimeName}@${declaredRuntime}\n` +
+      `- ${capabilityRegistryName}@${capabilityRegistry.version} -> private workspace package\n` +
+      `- ${agentKitName}@${agentKit.version} -> private workspace package, depending on ${runtimeName}@${agentKit.dependencies?.[runtimeName]} and ${capabilityRegistryName}@${agentKit.dependencies?.[capabilityRegistryName]}\n` +
       'Publication order is runtime first, then testkit. This check publishes nothing.\n',
   );
 }

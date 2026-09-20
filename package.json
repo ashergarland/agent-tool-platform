@@ -1,7 +1,7 @@
 {
   "name": "agent-tool-platform",
   "version": "0.0.0-development",
-  "description": "Shared runtime, testkit, and infrastructure primitives for hosted agent tool servers.",
+  "description": "Shared runtime, testkit, capability registry, agent composition, and infrastructure primitives for hosted agent tool servers.",
   "license": "MIT",
   "type": "module",
   "private": true,
@@ -13,7 +13,7 @@
     "examples/*"
   ],
   "scripts": {
-    "build": "npm run deployment:schemas && npm run build --workspaces --if-present",
+    "build": "npm run deployment:schemas && npm run registry:schemas && npm run registry:generate && npm run build --workspace @agent-tool-platform/runtime --workspace @agent-tool-platform/capability-registry && npm run build --workspaces --if-present",
     "clean": "node scripts/clean.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
@@ -25,6 +25,10 @@
     "test:coverage": "vitest run --coverage",
     "openapi:emit": "tsx scripts/emit-openapi.ts openapi.fixture.json",
     "deployment:schemas": "tsx scripts/emit-deployment-schemas.ts",
+    "registry:schemas": "tsx scripts/emit-capability-registry-schemas.ts",
+    "registry:generate": "tsx scripts/generate-capability-registry.ts",
+    "registry:validate": "tsx scripts/validate-capability-registry.ts",
+    "registry:verify-sources": "tsx scripts/verify-capability-registry-sources.ts",
     "metadata:validate": "tsx scripts/validate-metadata.ts",
     "package:smoke": "node scripts/package-smoke.mjs",
     "release:check": "node scripts/release-check.mjs"

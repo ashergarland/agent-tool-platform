@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-registry.schema.json",
+  "title": "Capability registry v1",
+  "description": "A deterministic first-party catalog of capability products and their available profiles and bindings.",
+  "$comment": "Cross-entry references, mutation consistency, ordering, and account-neutrality are enforced by the capability-registry validator.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "const": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-registry.schema.json"
+    },
+    "schemaVersion": { "type": "string", "const": "1.0.0" },
+    "kind": { "type": "string", "const": "capability-registry" },
+    "registryVersion": { "$ref": "#/$defs/__schema0" },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "$schema": {
+            "type": "string",
+            "const": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json"
+          },
+          "schemaVersion": { "type": "string", "const": "1.0.0" },
+          "kind": { "type": "string", "const": "capability" },
+          "id": { "$ref": "#/$defs/__schema1" },
+          "displayName": { "$ref": "#/$defs/__schema2" },
+          "description": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" },
+          "publisher": {
+            "type": "object",
+            "properties": {
+              "id": { "$ref": "#/$defs/__schema1" },
+              "displayName": { "$ref": "#/$defs/__schema2" },
+              "url": { "$ref": "#/$defs/__schema3" }
+            },
+            "required": ["id", "displayName", "url"],
+            "additionalProperties": false
+          },
+          "version": {
+            "type": "object",
+            "properties": {
+              "value": { "$ref": "#/$defs/__schema0" },
+              "status": { "type": "string", "enum": ["released", "declared", "development"] }
+            },
+            "required": ["value", "status"],
+            "additionalProperties": false
+          },
+          "artifacts": { "minItems": 1, "type": "array", "items": { "$ref": "#/$defs/__schema4" } },
+          "links": {
+            "type": "object",
+            "properties": {
+              "repository": { "$ref": "#/$defs/__schema3" },
+              "documentation": { "$ref": "#/$defs/__schema3" }
+            },
+            "required": ["repository", "documentation"],
+            "additionalProperties": false
+          },
+          "category": {
+            "type": "object",
+            "properties": {
+              "id": { "$ref": "#/$defs/__schema1" },
+              "displayName": { "$ref": "#/$defs/__schema2" }
+            },
+            "required": ["id", "displayName"],
+            "additionalProperties": false
+          },
+          "tags": { "minItems": 1, "type": "array", "items": { "$ref": "#/$defs/__schema1" } },
+          "toolCount": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+          "profiles": { "minItems": 1, "type": "array", "items": { "$ref": "#/$defs/__schema6" } },
+          "bindings": { "minItems": 1, "type": "array", "items": { "$ref": "#/$defs/__schema9" } },
+          "stateChanging": { "type": "boolean" },
+          "routing": {
+            "type": "object",
+            "properties": {
+              "summary": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" }
+            },
+            "required": ["summary"],
+            "additionalProperties": false
+          },
+          "conformance": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string", "enum": ["verified", "partial", "unverified"] },
+              "checks": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "runtime-contract",
+                    "mcp-metadata",
+                    "capability-profile-v1",
+                    "routing-metadata"
+                  ]
+                }
+              }
+            },
+            "required": ["status", "checks"],
+            "additionalProperties": false
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "capabilityId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[a-z0-9]+(?:[._/-][a-z0-9]+)*$"
+              },
+              "repository": { "$ref": "#/$defs/__schema3" },
+              "revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+              "metadataVersion": { "$ref": "#/$defs/__schema0" },
+              "releaseTag": {
+                "type": "string",
+                "pattern": "^v\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+              },
+              "metadata": {
+                "type": "object",
+                "properties": {
+                  "server": { "$ref": "#/$defs/__schema5" },
+                  "package": { "$ref": "#/$defs/__schema5" },
+                  "profiles": { "$ref": "#/$defs/__schema5" }
+                },
+                "required": ["server", "package"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["capabilityId", "repository", "revision", "metadataVersion", "metadata"],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "$schema",
+          "schemaVersion",
+          "kind",
+          "id",
+          "displayName",
+          "description",
+          "publisher",
+          "version",
+          "artifacts",
+          "links",
+          "category",
+          "tags",
+          "toolCount",
+          "profiles",
+          "bindings",
+          "stateChanging",
+          "routing",
+          "conformance",
+          "source"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["$schema", "schemaVersion", "kind", "registryVersion", "capabilities"],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
+    },
+    "__schema1": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "__schema2": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
+    "__schema3": { "type": "string", "format": "uri" },
+    "__schema4": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/__schema1" },
+        "kind": { "type": "string", "enum": ["npm", "oci", "source"] },
+        "identifier": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^\\S+$" },
+        "version": { "$ref": "#/$defs/__schema0" },
+        "availability": { "type": "string", "enum": ["published", "declared", "source-only"] },
+        "reference": { "$ref": "#/$defs/__schema5" }
+      },
+      "required": ["id", "kind", "identifier", "version", "availability", "reference"],
+      "additionalProperties": false
+    },
+    "__schema5": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^(?!\\/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))\\S+$"
+    },
+    "__schema6": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/__schema1" },
+        "description": { "$ref": "#/$defs/__schema7" },
+        "source": {
+          "type": "string",
+          "enum": ["capability-profile-declaration", "registry-curated"]
+        },
+        "dimensions": {
+          "type": "object",
+          "properties": {
+            "execution": { "type": "string", "enum": ["local", "hosted"] },
+            "delivery": { "type": "string", "enum": ["source", "package", "container"] },
+            "access": { "type": "string", "enum": ["local-process", "authenticated-service"] },
+            "workload": {
+              "type": "string",
+              "enum": ["none", "filesystem", "mount", "upload", "object-store", "provider"]
+            },
+            "provider": { "type": "string", "enum": ["none", "external"] },
+            "mutation": { "type": "string", "enum": ["read-only", "mutating"] }
+          },
+          "required": ["execution", "delivery", "access", "workload", "provider", "mutation"],
+          "additionalProperties": false
+        },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "summary": { "$ref": "#/$defs/__schema7" },
+            "scopes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "workspace-read",
+                  "repository-read",
+                  "filesystem-read",
+                  "filesystem-write",
+                  "artifact-write",
+                  "process-execute",
+                  "network-access",
+                  "provider-read",
+                  "provider-write"
+                ]
+              }
+            }
+          },
+          "required": ["summary", "scopes"],
+          "additionalProperties": false
+        },
+        "prerequisites": {
+          "type": "object",
+          "properties": {
+            "setupRequired": { "type": "boolean" },
+            "summary": { "$ref": "#/$defs/__schema7" },
+            "requiredSecrets": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$" }
+            },
+            "provider": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "$ref": "#/$defs/__schema1" },
+                  "description": { "$ref": "#/$defs/__schema7" }
+                },
+                "required": ["id", "description"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["setupRequired", "summary", "requiredSecrets", "provider"],
+          "additionalProperties": false
+        },
+        "readiness": {
+          "type": "object",
+          "properties": {
+            "signals": { "minItems": 1, "type": "array", "items": { "$ref": "#/$defs/__schema8" } },
+            "summary": { "$ref": "#/$defs/__schema7" }
+          },
+          "required": ["signals", "summary"],
+          "additionalProperties": false
+        },
+        "stateEffects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["artifact-create", "filesystem-write", "provider-mutation"]
+          }
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "source",
+        "dimensions",
+        "permissions",
+        "prerequisites",
+        "readiness",
+        "stateEffects"
+      ],
+      "additionalProperties": false
+    },
+    "__schema7": { "type": "string", "minLength": 1, "maxLength": 1000, "pattern": "\\S" },
+    "__schema8": { "type": "string", "enum": ["process", "workload", "provider"] },
+    "__schema9": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/__schema1" },
+        "profileId": { "$ref": "#/$defs/__schema1" },
+        "artifactId": { "$ref": "#/$defs/__schema1" },
+        "interface": { "type": "string", "enum": ["stdio", "http", "library", "custom"] },
+        "availability": { "type": "string", "enum": ["local", "remote", "hybrid"] }
+      },
+      "required": ["id", "profileId", "artifactId", "interface", "availability"],
+      "additionalProperties": false
+    }
+  }
+}
