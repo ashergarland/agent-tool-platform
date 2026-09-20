@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "types": ["node", "vitest/globals"],
+    "paths": {
+      "@agent-tool-platform/capability-registry": ["../capability-registry/src/index.ts"],
+      "@agent-tool-platform/runtime": ["../runtime/src/index.ts"],
+      "@agent-tool-platform/runtime/*": ["../runtime/src/*"]
+    }
+  }
+}

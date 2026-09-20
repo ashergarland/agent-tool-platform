@@ -45,6 +45,7 @@ interface Manifest {
 const publishablePackages = ['packages/runtime/package.json', 'packages/testkit/package.json'];
 const privatePackages = [
   'package.json',
+  'packages/agent-kit/package.json',
   'packages/capability-registry/package.json',
   'examples/minimal-capability/package.json',
 ];
@@ -64,6 +65,7 @@ const exists = async (path: string): Promise<boolean> => {
 const failures: string[] = [];
 
 const root = await load('package.json');
+const agentKit = await load('packages/agent-kit/package.json');
 const capabilityRegistry = await load('packages/capability-registry/package.json');
 const runtime = await load('packages/runtime/package.json');
 const testkit = await load('packages/testkit/package.json');
@@ -71,6 +73,16 @@ const testkit = await load('packages/testkit/package.json');
 if (capabilityRegistry.name !== '@agent-tool-platform/capability-registry') {
   failures.push(
     `packages/capability-registry/package.json: unexpected package name ${capabilityRegistry.name}`,
+  );
+}
+if (agentKit.name !== '@agent-tool-platform/agent-kit') {
+  failures.push(`packages/agent-kit/package.json: unexpected package name ${agentKit.name}`);
+}
+if (
+  agentKit.dependencies?.['@agent-tool-platform/capability-registry'] !== capabilityRegistry.version
+) {
+  failures.push(
+    'packages/agent-kit/package.json: must depend exactly on the workspace capability-registry version',
   );
 }
 if (capabilityRegistry.dependencies?.['@agent-tool-platform/agent-kit'] !== undefined) {
@@ -143,6 +155,7 @@ const documentation = [
   'README.md',
   'docs/releasing.md',
   'packages/runtime/README.md',
+  'packages/agent-kit/README.md',
   'packages/capability-registry/README.md',
   'packages/testkit/README.md',
 ];

@@ -7,6 +7,8 @@ const targets = [
   'openapi.fixture.json',
   'packages/capability-registry/dist',
   'packages/capability-registry/tsconfig.build.tsbuildinfo',
+  'packages/agent-kit/dist',
+  'packages/agent-kit/tsconfig.build.tsbuildinfo',
   'packages/runtime/dist',
   'packages/runtime/tsconfig.build.tsbuildinfo',
   'packages/testkit/dist',
