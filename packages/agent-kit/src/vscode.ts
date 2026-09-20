@@ -22,11 +22,58 @@ export interface VsCodeAdapterOutput {
   ];
 }
 
-const hostId = (capabilityId: string): string =>
-  capabilityId.replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '');
+const isIdentifierCharacter = (character: string): boolean =>
+  (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9');
 
-const inputId = (serverId: string, value: string): string =>
-  `${serverId}-${value.toLowerCase().replace(/[^a-z0-9]+/gu, '-')}`.replace(/-+$/gu, '');
+/**
+ * Collapses runs of characters outside `[a-z0-9]` into a single hyphen with a single linear scan.
+ * Registry-derived capability ids and configuration names are uncontrolled input, so this avoids
+ * the regex-based collapse-then-trim pattern CodeQL flags as a polynomial ReDoS risk; unlike a
+ * regex, this makes no backtracking decisions and always runs in time proportional to the input
+ * length. `lowercase` is a caller choice rather than a default so ids already validated as
+ * lowercase (capability/agent ids) are not silently rewritten, matching the prior regex behavior
+ * where only the input-id helper folded case.
+ *
+ * Exported only for direct regression testing of this internal normalizer; it is intentionally
+ * not part of the package's public barrel (`index.ts`).
+ */
+export const collapseToHyphens = (value: string, lowercase: boolean): string => {
+  let result = '';
+  let pendingHyphen = false;
+  for (const rawCharacter of value) {
+    const character = lowercase ? rawCharacter.toLowerCase() : rawCharacter;
+    if (isIdentifierCharacter(character)) {
+      if (pendingHyphen) {
+        result += '-';
+        pendingHyphen = false;
+      }
+      result += character;
+    } else {
+      pendingHyphen = true;
+    }
+  }
+  return result;
+};
+
+/** Trims leading and/or trailing hyphens with a linear scan. Exported for the same reason as
+ * {@link collapseToHyphens}. */
+export const trimHyphens = (value: string, leading: boolean, trailing: boolean): string => {
+  let start = 0;
+  let end = value.length;
+  if (leading) {
+    while (start < end && value[start] === '-') start += 1;
+  }
+  if (trailing) {
+    while (end > start && value[end - 1] === '-') end -= 1;
+  }
+  return value.slice(start, end);
+};
+
+export const hostId = (capabilityId: string): string =>
+  trimHyphens(collapseToHyphens(capabilityId, false), true, true);
+
+export const inputId = (serverId: string, value: string): string =>
+  trimHyphens(`${serverId}-${collapseToHyphens(value, true)}`, false, true);
 
 const packageCommand = (
   artifact: Pick<ResolvedCapabilityArtifact, 'availability' | 'identifier' | 'version'>,
