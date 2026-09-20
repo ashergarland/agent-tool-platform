@@ -22,6 +22,7 @@ const readJson = (root: string, path: string): VersionMetadata =>
 const releaseFiles = [
   'package.json',
   'package-lock.json',
+  'packages/agent-kit/package.json',
   'packages/runtime/package.json',
   'packages/testkit/package.json',
   'examples/minimal-capability/package.json',
@@ -39,6 +40,7 @@ const createReleaseFixture = (): string => {
   }
   for (const path of [
     'package.json',
+    'packages/agent-kit/package.json',
     'packages/runtime/package.json',
     'packages/testkit/package.json',
     'examples/minimal-capability/package.json',
@@ -60,19 +62,25 @@ afterEach(() => {
 describe('release version stamping', () => {
   it('uses release metadata only when the release workflow supplies a version', () => {
     const root = readJson(repositoryRoot, 'package.json');
+    const agentKit = readJson(repositoryRoot, 'packages/agent-kit/package.json');
     const runtime = readJson(repositoryRoot, 'packages/runtime/package.json');
     const testkit = readJson(repositoryRoot, 'packages/testkit/package.json');
     const fixture = readJson(repositoryRoot, 'examples/minimal-capability/package.json');
     const lock = readJson(repositoryRoot, 'package-lock.json');
 
     const expectedVersion = process.env.RELEASE_VERSION ?? developmentVersion;
-    for (const manifest of [root, runtime, testkit, fixture]) {
+    for (const manifest of [root, agentKit, runtime, testkit, fixture]) {
       expect(manifest.version).toBe(expectedVersion);
     }
+    expect(agentKit.dependencies?.[runtimeName]).toBe(expectedVersion);
     expect(testkit.dependencies?.[runtimeName]).toBe(expectedVersion);
     expect(fixture.dependencies?.[runtimeName]).toBe(expectedVersion);
     expect(lock.version).toBe(developmentVersion);
     expect(lock.packages?.['']?.version).toBe(developmentVersion);
+    expect(lock.packages?.['packages/agent-kit']?.version).toBe(developmentVersion);
+    expect(lock.packages?.['packages/agent-kit']?.dependencies?.[runtimeName]).toBe(
+      developmentVersion,
+    );
     expect(lock.packages?.['packages/runtime']?.version).toBe(developmentVersion);
     expect(lock.packages?.['packages/testkit']?.version).toBe(developmentVersion);
     expect(lock.packages?.['packages/testkit']?.dependencies?.[runtimeName]).toBe(
@@ -108,11 +116,14 @@ describe('release version stamping', () => {
     );
 
     const repository = readJson(root, 'package.json');
+    const agentKit = readJson(root, 'packages/agent-kit/package.json');
     const runtime = readJson(root, 'packages/runtime/package.json');
     const testkit = readJson(root, 'packages/testkit/package.json');
     const fixture = readJson(root, 'examples/minimal-capability/package.json');
     expect(stampOutput).toContain('Stamped release 1.2.3');
     expect(repository.version).toBe('1.2.3');
+    expect(agentKit.version).toBe('1.2.3');
+    expect(agentKit.dependencies?.[runtimeName]).toBe('1.2.3');
     expect(runtime.version).toBe('1.2.3');
     expect(testkit.version).toBe('1.2.3');
     expect(testkit.dependencies?.[runtimeName]).toBe('1.2.3');

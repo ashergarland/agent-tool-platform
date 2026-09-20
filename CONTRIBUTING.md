@@ -15,7 +15,8 @@ Things that have deliberately been kept out, as examples of the boundary:
   policy, composed on top of the generic mutation gate.
 - Which executables may run and with which argv — capability process policy, composed on top of the
   generic bounded-process primitive.
-- Cross-capability workflow routing — that belongs to agent composition repositories.
+- Concrete cross-capability workflow policy — Agent Kit provides generic composition mechanics,
+  while policy remains in canonical agent definitions rather than Runtime.
 
 ## Working on the repository
 
@@ -62,9 +63,9 @@ through `additionalEnv` or `secretRefs` from the capability's own composition.
 
 ## Publishing
 
-`@agent-tool-platform/runtime` and `@agent-tool-platform/testkit` are publishable public packages;
-the repository root and `examples/minimal-capability` are `private: true` and the metadata check
-fails if that changes.
+`@agent-tool-platform/runtime` and `@agent-tool-platform/testkit` are publishable public packages.
+The repository root, `@agent-tool-platform/agent-kit` during M5, and
+`examples/minimal-capability` are `private: true`.
 
 For v0 the two packages are released in lockstep and the testkit depends on the runtime at exactly
 that version. Checked-in workspace metadata stays at `0.0.0-development`; do not edit package or

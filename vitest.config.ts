@@ -6,6 +6,7 @@ const resolvePath = (relative: string): string => fileURLToPath(new URL(relative
 export default defineConfig({
   resolve: {
     alias: {
+      '@agent-tool-platform/agent-kit': resolvePath('./packages/agent-kit/src/index.ts'),
       '@agent-tool-platform/runtime': resolvePath('./packages/runtime/src/index.ts'),
       '@agent-tool-platform/testkit': resolvePath('./packages/testkit/src/index.ts'),
       '@agent-tool-platform/example-minimal-capability': resolvePath(

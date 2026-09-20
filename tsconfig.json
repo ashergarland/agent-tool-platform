@@ -6,6 +6,8 @@
     "noEmit": true,
     "types": ["node", "vitest/globals"],
     "paths": {
+      "@agent-tool-platform/agent-kit": ["./packages/agent-kit/src/index.ts"],
+      "@agent-tool-platform/agent-kit/*": ["./packages/agent-kit/src/*"],
       "@agent-tool-platform/runtime": ["./packages/runtime/src/index.ts"],
       "@agent-tool-platform/runtime/*": ["./packages/runtime/src/*"],
       "@agent-tool-platform/testkit": ["./packages/testkit/src/index.ts"],
