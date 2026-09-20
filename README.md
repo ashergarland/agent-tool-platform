@@ -1,6 +1,7 @@
 # agent-tool-platform
 
-Shared runtime, testkit, and infrastructure primitives for the Hosted Agent Tool Servers project.
+Shared runtime, capability registry, testkit, and infrastructure primitives for the Hosted Agent
+Tool Servers project.
 
 This repository is **not** a tool server, an agent, or a persona. It contains no domain behaviour:
 no ASTs, no repositories, no Azure resources, no documents, no images. It is the layer every
@@ -83,21 +84,27 @@ contracts. There is no central proxy and no combined server.
 
 ## Packages
 
-| Package                                                      | Purpose                                                                               |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| [`@agent-tool-platform/runtime`](packages/runtime)           | The shared implementation a capability consumes at runtime.                           |
-| [`@agent-tool-platform/testkit`](packages/testkit)           | Reusable conformance suites that prove a capability satisfies the platform contracts. |
-| [`examples/minimal-capability`](examples/minimal-capability) | A private fixture used only to prove the platform. Never published, never a product.  |
+| Package                                                                    | Purpose                                                                               |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [`@agent-tool-platform/runtime`](packages/runtime)                         | The shared implementation a capability consumes at runtime.                           |
+| [`@agent-tool-platform/capability-registry`](packages/capability-registry) | Versioned first-party capability metadata, validation, and lookup APIs.               |
+| [`@agent-tool-platform/testkit`](packages/testkit)                         | Reusable conformance suites that prove a capability satisfies the platform contracts. |
+| [`examples/minimal-capability`](examples/minimal-capability)               | A private fixture used only to prove the platform. Never published, never a product.  |
 
 The package count is small on purpose. Auth, routing, telemetry, errors, and process handling are
 modules inside `runtime`, not separate packages: splitting them would buy version skew and nothing
 else.
 
-`testkit` may depend on `runtime`. `runtime` must never depend on `testkit`.
+`testkit` may depend on `runtime`; `runtime` must never depend on `testkit`. The registry is a
+standalone sibling package whose execution-dimension vocabulary is regression-checked against the
+runtime deployment contract. Agent Kit may consume `capability-registry`; `capability-registry`
+must never depend on Agent Kit. The registry package is checked in but intentionally unpublished in
+the current Hackathon slice.
 
 ### Installation
 
-Both packages are public and scoped to `@agent-tool-platform` on the primary npm registry.
+Runtime and testkit are public and scoped to `@agent-tool-platform` on the primary npm registry.
+The capability registry remains a checked-in private workspace package for this Hackathon slice.
 
 ```bash
 # production capability dependency
@@ -663,6 +670,7 @@ npm install
 npm run typecheck
 npm run test:coverage
 npm run build
+npm run registry:validate
 npm run package:smoke
 npm run release:check
 npm run openapi:emit

@@ -1,0 +1,95 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+  "schemaVersion": "1.0.0",
+  "kind": "capability",
+  "id": "document-optimizer",
+  "displayName": "Document Optimizer",
+  "description": "Deterministic progressive-fidelity PDF and DOCX optimization with provenance.",
+  "publisher": {
+    "id": "ashergarland",
+    "displayName": "Asher Garland",
+    "url": "https://github.com/ashergarland"
+  },
+  "version": {
+    "value": "0.0.0-development",
+    "status": "development"
+  },
+  "artifacts": [
+    {
+      "id": "npm-package",
+      "kind": "npm",
+      "identifier": "agent-tool-server-document-optimizer",
+      "version": "0.0.0-development",
+      "availability": "declared",
+      "reference": "server.json#/packages/0"
+    }
+  ],
+  "links": {
+    "repository": "https://github.com/ashergarland/agent-tool-server-document-optimizer",
+    "documentation": "https://github.com/ashergarland/agent-tool-server-document-optimizer#readme"
+  },
+  "category": {
+    "id": "documents",
+    "displayName": "Documents"
+  },
+  "tags": ["context-optimization", "documents", "docx", "pdf", "provenance"],
+  "toolCount": 6,
+  "profiles": [
+    {
+      "id": "local-filesystem-package",
+      "description": "Read-only local PDF and DOCX optimization beneath one configured document root.",
+      "source": "capability-profile-declaration",
+      "dimensions": {
+        "execution": "local",
+        "delivery": "package",
+        "access": "local-process",
+        "workload": "filesystem",
+        "provider": "none",
+        "mutation": "read-only"
+      },
+      "permissions": {
+        "summary": "Read PDF and DOCX files beneath the configured document root.",
+        "scopes": ["filesystem-read"]
+      },
+      "prerequisites": {
+        "setupRequired": true,
+        "summary": "Requires a configured local document root; no provider or secret setup is required.",
+        "requiredSecrets": [],
+        "provider": []
+      },
+      "readiness": {
+        "signals": ["process", "workload"],
+        "summary": "Ready when the configured document root is present and usable."
+      },
+      "stateEffects": []
+    }
+  ],
+  "bindings": [
+    {
+      "id": "local-stdio",
+      "profileId": "local-filesystem-package",
+      "artifactId": "npm-package",
+      "interface": "stdio",
+      "availability": "local"
+    }
+  ],
+  "stateChanging": false,
+  "routing": {
+    "summary": "Use for deterministic, provenance-aware PDF and DOCX representations with progressive access to outlines, sections, tables, and figures."
+  },
+  "conformance": {
+    "status": "verified",
+    "checks": ["capability-profile-v1", "mcp-metadata", "routing-metadata", "runtime-contract"]
+  },
+  "source": {
+    "capabilityId": "io.github.ashergarland/agent-tool-server-document-optimizer",
+    "repository": "https://github.com/ashergarland/agent-tool-server-document-optimizer",
+    "revision": "35223be62972093a1b5180b3b0672654f90fb5ad",
+    "metadataVersion": "0.0.0-development",
+    "metadata": {
+      "server": "server.json",
+      "package": "package.json",
+      "profiles": "capability-profiles.json"
+    }
+  }
+}

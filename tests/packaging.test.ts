@@ -121,6 +121,7 @@ describe('publishable package metadata', () => {
   it('keeps the repository root and the example fixture unpublishable', () => {
     expect(root.private).toBe(true);
     expect(readManifest('examples/minimal-capability/package.json').private).toBe(true);
+    expect(readManifest('packages/capability-registry/package.json').private).toBe(true);
   });
 
   it('ships deployment schemas, runtime commands, and matched package subpaths', () => {

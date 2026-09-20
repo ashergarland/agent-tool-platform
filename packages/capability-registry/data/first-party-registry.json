@@ -1,0 +1,911 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-registry.schema.json",
+  "schemaVersion": "1.0.0",
+  "kind": "capability-registry",
+  "registryVersion": "0.0.0-development",
+  "capabilities": [
+    {
+      "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+      "schemaVersion": "1.0.0",
+      "kind": "capability",
+      "id": "ast-summarizer",
+      "displayName": "AST Summarizer",
+      "description": "Read-only TypeScript and JavaScript declaration skeletons and local dependency graphs for one workspace.",
+      "publisher": {
+        "id": "ashergarland",
+        "displayName": "Asher Garland",
+        "url": "https://github.com/ashergarland"
+      },
+      "version": {
+        "value": "0.1.1",
+        "status": "released"
+      },
+      "artifacts": [
+        {
+          "id": "npm-package",
+          "kind": "npm",
+          "identifier": "@agent-tool-platform/ast-summarizer",
+          "version": "0.1.1",
+          "availability": "published",
+          "reference": "v0.1.1"
+        }
+      ],
+      "links": {
+        "repository": "https://github.com/ashergarland/agent-tool-server-ast-summarizer",
+        "documentation": "https://github.com/ashergarland/agent-tool-server-ast-summarizer#readme"
+      },
+      "category": {
+        "id": "development",
+        "displayName": "Development"
+      },
+      "tags": [
+        "code",
+        "context-optimization",
+        "dependency-analysis",
+        "typescript"
+      ],
+      "toolCount": 2,
+      "profiles": [
+        {
+          "id": "local-package",
+          "description": "Read-only local package execution over stdio against one TypeScript or JavaScript workspace.",
+          "source": "registry-curated",
+          "dimensions": {
+            "execution": "local",
+            "delivery": "package",
+            "access": "local-process",
+            "workload": "filesystem",
+            "provider": "none",
+            "mutation": "read-only"
+          },
+          "permissions": {
+            "summary": "Read files beneath the configured workspace root.",
+            "scopes": [
+              "workspace-read"
+            ]
+          },
+          "prerequisites": {
+            "setupRequired": true,
+            "summary": "Requires a local TypeScript or JavaScript workspace; no provider or secret setup is required.",
+            "requiredSecrets": [],
+            "provider": []
+          },
+          "readiness": {
+            "signals": [
+              "process",
+              "workload"
+            ],
+            "summary": "Ready when the local process can read the configured workspace."
+          },
+          "stateEffects": []
+        }
+      ],
+      "bindings": [
+        {
+          "id": "local-stdio",
+          "profileId": "local-package",
+          "artifactId": "npm-package",
+          "interface": "stdio",
+          "availability": "local"
+        }
+      ],
+      "stateChanging": false,
+      "routing": {
+        "summary": "Use for TypeScript or JavaScript declarations, signatures, file skeletons, dependency structure, and codebase orientation."
+      },
+      "conformance": {
+        "status": "partial",
+        "checks": [
+          "mcp-metadata",
+          "routing-metadata",
+          "runtime-contract"
+        ]
+      },
+      "source": {
+        "capabilityId": "io.github.ashergarland/agent-tool-server-ast-summarizer",
+        "repository": "https://github.com/ashergarland/agent-tool-server-ast-summarizer",
+        "revision": "93bffa78d3fbbb4d835a8da55f33af68e48ec8cd",
+        "metadataVersion": "0.0.0-development",
+        "releaseTag": "v0.1.1",
+        "metadata": {
+          "server": "server.json",
+          "package": "package.json"
+        }
+      }
+    },
+    {
+      "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+      "schemaVersion": "1.0.0",
+      "kind": "capability",
+      "id": "azure",
+      "displayName": "Azure Agent Tool Server",
+      "description": "Inspect, diagnose, operate and deploy Azure through a guard-railed control plane",
+      "publisher": {
+        "id": "ashergarland",
+        "displayName": "Asher Garland",
+        "url": "https://github.com/ashergarland"
+      },
+      "version": {
+        "value": "0.2.0",
+        "status": "declared"
+      },
+      "artifacts": [
+        {
+          "id": "oci-container",
+          "kind": "oci",
+          "identifier": "ghcr.io/ashergarland/agent-tool-server-azure",
+          "version": "0.2.0",
+          "availability": "declared",
+          "reference": "server.json#/packages/0"
+        }
+      ],
+      "links": {
+        "repository": "https://github.com/ashergarland/agent-tool-server-azure",
+        "documentation": "https://github.com/ashergarland/agent-tool-server-azure#readme"
+      },
+      "category": {
+        "id": "cloud",
+        "displayName": "Cloud"
+      },
+      "tags": [
+        "azure",
+        "cloud",
+        "diagnostics",
+        "infrastructure",
+        "operations"
+      ],
+      "toolCount": 18,
+      "profiles": [
+        {
+          "id": "hosted-mutating",
+          "description": "Authenticated hosted Azure operations with separately enabled mutations, previews, confirmation, scoped RBAC, and provider verification.",
+          "source": "capability-profile-declaration",
+          "dimensions": {
+            "execution": "hosted",
+            "delivery": "container",
+            "access": "authenticated-service",
+            "workload": "provider",
+            "provider": "external",
+            "mutation": "mutating"
+          },
+          "permissions": {
+            "summary": "Read Azure state and perform only separately enabled, allow-listed operations within operator-scoped RBAC.",
+            "scopes": [
+              "network-access",
+              "provider-read",
+              "provider-write"
+            ]
+          },
+          "prerequisites": {
+            "setupRequired": true,
+            "summary": "Requires an authenticated hosted service, operator-scoped Azure identities, provider registrations, and separately enabled mutation policy.",
+            "requiredSecrets": [
+              "connector-api-key"
+            ],
+            "provider": [
+              {
+                "id": "azure-provider-registrations",
+                "description": "Every resource provider required by an authorized operation or Bicep template is registered by the operator."
+              },
+              {
+                "id": "azure-resource-manager",
+                "description": "Azure Resource Manager and Resource Graph are available to the selected managed identity."
+              }
+            ]
+          },
+          "readiness": {
+            "signals": [
+              "process",
+              "provider",
+              "workload"
+            ],
+            "summary": "Ready when hosted access, provider authentication, selected mutation RBAC, and deployment prerequisites are usable."
+          },
+          "stateEffects": [
+            "provider-mutation"
+          ]
+        },
+        {
+          "id": "hosted-read-only",
+          "description": "Authenticated hosted inspection and diagnosis through an operator-scoped Azure identity.",
+          "source": "capability-profile-declaration",
+          "dimensions": {
+            "execution": "hosted",
+            "delivery": "container",
+            "access": "authenticated-service",
+            "workload": "provider",
+            "provider": "external",
+            "mutation": "read-only"
+          },
+          "permissions": {
+            "summary": "Read Azure state within operator-selected scopes and the managed identity's effective RBAC.",
+            "scopes": [
+              "network-access",
+              "provider-read"
+            ]
+          },
+          "prerequisites": {
+            "setupRequired": true,
+            "summary": "Requires an authenticated hosted service, an operator-scoped Azure identity, and required provider registrations.",
+            "requiredSecrets": [
+              "connector-api-key"
+            ],
+            "provider": [
+              {
+                "id": "azure-provider-registrations",
+                "description": "Resource providers needed by the resources being inspected are registered by the operator."
+              },
+              {
+                "id": "azure-resource-manager",
+                "description": "Azure Resource Manager and Resource Graph are available to the selected managed identity."
+              }
+            ]
+          },
+          "readiness": {
+            "signals": [
+              "process",
+              "provider",
+              "workload"
+            ],
+            "summary": "Ready when hosted access, Azure authentication, a read-only provider query, and configured RBAC checks succeed."
+          },
+          "stateEffects": []
+        }
+      ],
+      "bindings": [
+        {
+          "id": "hosted-mutating-http",
+          "profileId": "hosted-mutating",
+          "artifactId": "oci-container",
+          "interface": "http",
+          "availability": "remote"
+        },
+        {
+          "id": "hosted-read-only-http",
+          "profileId": "hosted-read-only",
+          "artifactId": "oci-container",
+          "interface": "http",
+          "availability": "remote"
+        }
+      ],
+      "stateChanging": true,
+      "routing": {
+        "summary": "Use for Azure inventory, Resource Graph queries, diagnostics, guarded operations, Bicep validation and what-if, deployments, status, and rollback."
+      },
+      "conformance": {
+        "status": "verified",
+        "checks": [
+          "capability-profile-v1",
+          "mcp-metadata",
+          "routing-metadata",
+          "runtime-contract"
+        ]
+      },
+      "source": {
+        "capabilityId": "io.github.ashergarland/agent-tool-server-azure",
+        "repository": "https://github.com/ashergarland/agent-tool-server-azure",
+        "revision": "a2ea5bac9162159b4b0b04ce12e80d46a1b9a79c",
+        "metadataVersion": "0.2.0",
+        "metadata": {
+          "server": "server.json",
+          "package": "package.json",
+          "profiles": "capability-profiles.json"
+        }
+      }
+    },
+    {
+      "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+      "schemaVersion": "1.0.0",
+      "kind": "capability",
+      "id": "data-cruncher",
+      "displayName": "Data Cruncher",
+      "description": "Reduce large local JSON, JSONL, log, and text files with bounded jq and ripgrep tools.",
+      "publisher": {
+        "id": "ashergarland",
+        "displayName": "Asher Garland",
+        "url": "https://github.com/ashergarland"
+      },
+      "version": {
+        "value": "0.0.0-development",
+        "status": "development"
+      },
+      "artifacts": [
+        {
+          "id": "npm-package",
+          "kind": "npm",
+          "identifier": "agent-tool-server-data-cruncher",
+          "version": "0.0.0-development",
+          "availability": "declared",
+          "reference": "server.json#/packages/0"
+        }
+      ],
+      "links": {
+        "repository": "https://github.com/ashergarland/agent-tool-server-data-cruncher",
+        "documentation": "https://github.com/ashergarland/agent-tool-server-data-cruncher#readme"
+      },
+      "category": {
+        "id": "data",
+        "displayName": "Data"
+      },
+      "tags": [
+        "context-optimization",
+        "data",
+        "jq",
+        "logs",
+        "ripgrep"
+      ],
+      "toolCount": 2,
+      "profiles": [
+        {
+          "id": "local-package",
+          "description": "Read-only local package execution over stdio against one explicitly selected filesystem root.",
+          "source": "capability-profile-declaration",
+          "dimensions": {
+            "execution": "local",
+            "delivery": "package",
+            "access": "local-process",
+            "workload": "filesystem",
+            "provider": "none",
+            "mutation": "read-only"
+          },
+          "permissions": {
+            "summary": "Read one selected local data file and execute bounded jq or ripgrep subprocesses.",
+            "scopes": [
+              "filesystem-read",
+              "process-execute"
+            ]
+          },
+          "prerequisites": {
+            "setupRequired": true,
+            "summary": "Requires a configured data root plus supported jq and ripgrep executables; no provider or secret setup is required.",
+            "requiredSecrets": [],
+            "provider": []
+          },
+          "readiness": {
+            "signals": [
+              "process",
+              "workload"
+            ],
+            "summary": "Ready when the data root, jq, and ripgrep are usable."
+          },
+          "stateEffects": []
+        }
+      ],
+      "bindings": [
+        {
+          "id": "local-stdio",
+          "profileId": "local-package",
+          "artifactId": "npm-package",
+          "interface": "stdio",
+          "availability": "local"
+        }
+      ],
+      "stateChanging": false,
+      "routing": {
+        "summary": "Use for bounded jq reduction and ripgrep search over large local JSON, JSONL, log, or text files."
+      },
+      "conformance": {
+        "status": "verified",
+        "checks": [
+          "capability-profile-v1",
+          "mcp-metadata",
+          "routing-metadata",
+          "runtime-contract"
+        ]
+      },
+      "source": {
+        "capabilityId": "io.github.ashergarland/agent-tool-server-data-cruncher",
+        "repository": "https://github.com/ashergarland/agent-tool-server-data-cruncher",
+        "revision": "67bc95dd4ba9d2b8ae829650d470a055819121f1",
+        "metadataVersion": "0.0.0-development",
+        "metadata": {
+          "server": "server.json",
+          "package": "package.json",
+          "profiles": "capability-profiles.json"
+        }
+      }
+    },
+    {
+      "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+      "schemaVersion": "1.0.0",
+      "kind": "capability",
+      "id": "doc-rag",
+      "displayName": "Documentation RAG",
+      "description": "Retrieve bounded evidence from one configured documentation corpus.",
+      "publisher": {
+        "id": "ashergarland",
+        "displayName": "Asher Garland",
+        "url": "https://github.com/ashergarland"
+      },
+      "version": {
+        "value": "0.0.0-development",
+        "status": "development"
+      },
+      "artifacts": [
+        {
+          "id": "npm-package",
+          "kind": "npm",
+          "identifier": "agent-tool-server-doc-rag",
+          "version": "0.0.0-development",
+          "availability": "declared",
+          "reference": "server.json#/packages/0"
+        }
+      ],
+      "links": {
+        "repository": "https://github.com/ashergarland/agent-tool-server-doc-rag",
+        "documentation": "https://github.com/ashergarland/agent-tool-server-doc-rag#readme"
+      },
+      "category": {
+        "id": "knowledge",
+        "displayName": "Knowledge"
+      },
+      "tags": [
+        "context-optimization",
+        "documentation",
+        "provenance",
+        "rag",
+        "retrieval"
+      ],
+      "toolCount": 1,
+      "profiles": [
+        {
+          "id": "local-filesystem-package",
+          "description": "Read-only local package execution over stdio against one filesystem corpus.",
+          "source": "capability-profile-declaration",
+          "dimensions": {
+            "execution": "local",
+            "delivery": "package",
+            "access": "local-process",
+            "workload": "filesystem",
+            "provider": "none",
+            "mutation": "read-only"
+          },
+          "permissions": {
+            "summary": "Read documents beneath the configured documentation root.",
+            "scopes": [
+              "filesystem-read"
+            ]
+          },
+          "prerequisites": {
+            "setupRequired": true,
+            "summary": "Requires a configured local documentation corpus; no provider or secret setup is required.",
+            "requiredSecrets": [],
+            "provider": []
+          },
+          "readiness": {
+            "signals": [
+              "process",
+              "workload"
+            ],
+            "summary": "Ready after the configured documentation root yields a validated non-empty index."
+          },
+          "stateEffects": []
+        }
+      ],
+      "bindings": [
+        {
+          "id": "local-stdio",
+          "profileId": "local-filesystem-package",
+          "artifactId": "npm-package",
+          "interface": "stdio",
+          "availability": "local"
+        }
+      ],
+      "stateChanging": false,
+      "routing": {
+        "summary": "Use for bounded, provenance-rich retrieval from one configured documentation corpus."
+      },
+      "conformance": {
+        "status": "verified",
+        "checks": [
+          "capability-profile-v1",
+          "mcp-metadata",
+          "routing-metadata",
+          "runtime-contract"
+        ]
+      },
+      "source": {
+        "capabilityId": "io.github.ashergarland/agent-tool-server-doc-rag",
+        "repository": "https://github.com/ashergarland/agent-tool-server-doc-rag",
+        "revision": "b4ead6e48d00c14b59089e7169cb03ac6f57b181",
+        "metadataVersion": "0.0.0-development",
+        "metadata": {
+          "server": "server.json",
+          "package": "package.json",
+          "profiles": "capability-profiles.json"
+        }
+      }
+    },
+    {
+      "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+      "schemaVersion": "1.0.0",
+      "kind": "capability",
+      "id": "document-optimizer",
+      "displayName": "Document Optimizer",
+      "description": "Deterministic progressive-fidelity PDF and DOCX optimization with provenance.",
+      "publisher": {
+        "id": "ashergarland",
+        "displayName": "Asher Garland",
+        "url": "https://github.com/ashergarland"
+      },
+      "version": {
+        "value": "0.0.0-development",
+        "status": "development"
+      },
+      "artifacts": [
+        {
+          "id": "npm-package",
+          "kind": "npm",
+          "identifier": "agent-tool-server-document-optimizer",
+          "version": "0.0.0-development",
+          "availability": "declared",
+          "reference": "server.json#/packages/0"
+        }
+      ],
+      "links": {
+        "repository": "https://github.com/ashergarland/agent-tool-server-document-optimizer",
+        "documentation": "https://github.com/ashergarland/agent-tool-server-document-optimizer#readme"
+      },
+      "category": {
+        "id": "documents",
+        "displayName": "Documents"
+      },
+      "tags": [
+        "context-optimization",
+        "documents",
+        "docx",
+        "pdf",
+        "provenance"
+      ],
+      "toolCount": 6,
+      "profiles": [
+        {
+          "id": "local-filesystem-package",
+          "description": "Read-only local PDF and DOCX optimization beneath one configured document root.",
+          "source": "capability-profile-declaration",
+          "dimensions": {
+            "execution": "local",
+            "delivery": "package",
+            "access": "local-process",
+            "workload": "filesystem",
+            "provider": "none",
+            "mutation": "read-only"
+          },
+          "permissions": {
+            "summary": "Read PDF and DOCX files beneath the configured document root.",
+            "scopes": [
+              "filesystem-read"
+            ]
+          },
+          "prerequisites": {
+            "setupRequired": true,
+            "summary": "Requires a configured local document root; no provider or secret setup is required.",
+            "requiredSecrets": [],
+            "provider": []
+          },
+          "readiness": {
+            "signals": [
+              "process",
+              "workload"
+            ],
+            "summary": "Ready when the configured document root is present and usable."
+          },
+          "stateEffects": []
+        }
+      ],
+      "bindings": [
+        {
+          "id": "local-stdio",
+          "profileId": "local-filesystem-package",
+          "artifactId": "npm-package",
+          "interface": "stdio",
+          "availability": "local"
+        }
+      ],
+      "stateChanging": false,
+      "routing": {
+        "summary": "Use for deterministic, provenance-aware PDF and DOCX representations with progressive access to outlines, sections, tables, and figures."
+      },
+      "conformance": {
+        "status": "verified",
+        "checks": [
+          "capability-profile-v1",
+          "mcp-metadata",
+          "routing-metadata",
+          "runtime-contract"
+        ]
+      },
+      "source": {
+        "capabilityId": "io.github.ashergarland/agent-tool-server-document-optimizer",
+        "repository": "https://github.com/ashergarland/agent-tool-server-document-optimizer",
+        "revision": "35223be62972093a1b5180b3b0672654f90fb5ad",
+        "metadataVersion": "0.0.0-development",
+        "metadata": {
+          "server": "server.json",
+          "package": "package.json",
+          "profiles": "capability-profiles.json"
+        }
+      }
+    },
+    {
+      "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+      "schemaVersion": "1.0.0",
+      "kind": "capability",
+      "id": "git-optimizer",
+      "displayName": "Git Optimizer",
+      "description": "Read-only, bounded Git change summaries for local coding agents.",
+      "publisher": {
+        "id": "ashergarland",
+        "displayName": "Asher Garland",
+        "url": "https://github.com/ashergarland"
+      },
+      "version": {
+        "value": "0.1.0",
+        "status": "declared"
+      },
+      "artifacts": [
+        {
+          "id": "npm-package",
+          "kind": "npm",
+          "identifier": "agent-tool-server-git-optimizer",
+          "version": "0.1.0",
+          "availability": "declared",
+          "reference": "server.json#/packages/0"
+        }
+      ],
+      "links": {
+        "repository": "https://github.com/ashergarland/agent-tool-server-git-optimizer",
+        "documentation": "https://github.com/ashergarland/agent-tool-server-git-optimizer#readme"
+      },
+      "category": {
+        "id": "development",
+        "displayName": "Development"
+      },
+      "tags": [
+        "context-optimization",
+        "diff",
+        "git",
+        "source-control"
+      ],
+      "toolCount": 1,
+      "profiles": [
+        {
+          "id": "local-package",
+          "description": "Read-only local Git change analysis over repositories already accessible to the invoking user.",
+          "source": "capability-profile-declaration",
+          "dimensions": {
+            "execution": "local",
+            "delivery": "package",
+            "access": "local-process",
+            "workload": "filesystem",
+            "provider": "none",
+            "mutation": "read-only"
+          },
+          "permissions": {
+            "summary": "Run read-only Git operations within explicitly allowed local repository roots.",
+            "scopes": [
+              "process-execute",
+              "repository-read"
+            ]
+          },
+          "prerequisites": {
+            "setupRequired": true,
+            "summary": "Requires Git and at least one readable local repository root; no provider or secret setup is required.",
+            "requiredSecrets": [],
+            "provider": []
+          },
+          "readiness": {
+            "signals": [
+              "process",
+              "workload"
+            ],
+            "summary": "Ready when Git is available and a configured repository root is readable."
+          },
+          "stateEffects": []
+        }
+      ],
+      "bindings": [
+        {
+          "id": "local-stdio",
+          "profileId": "local-package",
+          "artifactId": "npm-package",
+          "interface": "stdio",
+          "availability": "local"
+        }
+      ],
+      "stateChanging": false,
+      "routing": {
+        "summary": "Use for bounded summaries of changed files, symbols, configuration keys, and routes between two local Git commits."
+      },
+      "conformance": {
+        "status": "verified",
+        "checks": [
+          "capability-profile-v1",
+          "mcp-metadata",
+          "routing-metadata",
+          "runtime-contract"
+        ]
+      },
+      "source": {
+        "capabilityId": "io.github.ashergarland/agent-tool-server-git-optimizer",
+        "repository": "https://github.com/ashergarland/agent-tool-server-git-optimizer",
+        "revision": "6fe83371af641fdbaea1e22c0c8bf981caa882ab",
+        "metadataVersion": "0.1.0",
+        "metadata": {
+          "server": "server.json",
+          "package": "package.json",
+          "profiles": "capability-profiles.json"
+        }
+      }
+    },
+    {
+      "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+      "schemaVersion": "1.0.0",
+      "kind": "capability",
+      "id": "vision",
+      "displayName": "Vision",
+      "description": "Bounded image and OCR analysis through a thin Agent Tool Platform capability and capability-owned Python worker.",
+      "publisher": {
+        "id": "ashergarland",
+        "displayName": "Asher Garland",
+        "url": "https://github.com/ashergarland"
+      },
+      "version": {
+        "value": "0.0.0-development",
+        "status": "development"
+      },
+      "artifacts": [
+        {
+          "id": "npm-package",
+          "kind": "npm",
+          "identifier": "agent-tool-server-vision",
+          "version": "0.0.0-development",
+          "availability": "declared",
+          "reference": "server.json#/packages/0"
+        }
+      ],
+      "links": {
+        "repository": "https://github.com/ashergarland/agent-tool-server-vision",
+        "documentation": "https://github.com/ashergarland/agent-tool-server-vision#readme"
+      },
+      "category": {
+        "id": "media",
+        "displayName": "Media"
+      },
+      "tags": [
+        "artifacts",
+        "context-optimization",
+        "images",
+        "ocr",
+        "vision"
+      ],
+      "toolCount": 4,
+      "profiles": [
+        {
+          "id": "hybrid-azure-package",
+          "description": "Local stdio execution with bounded filesystem images and explicitly configured Azure Content Understanding OCR.",
+          "source": "capability-profile-declaration",
+          "dimensions": {
+            "execution": "local",
+            "delivery": "package",
+            "access": "local-process",
+            "workload": "filesystem",
+            "provider": "external",
+            "mutation": "mutating"
+          },
+          "permissions": {
+            "summary": "Read allowed local images, execute the capability-owned worker, call Azure OCR, and create principal-scoped artifacts.",
+            "scopes": [
+              "artifact-write",
+              "filesystem-read",
+              "network-access",
+              "process-execute",
+              "provider-read"
+            ]
+          },
+          "prerequisites": {
+            "setupRequired": true,
+            "summary": "Requires allowed image roots, the Python image worker, and an explicitly configured Azure Content Understanding identity.",
+            "requiredSecrets": [
+              "AZURE_CLIENT_SECRET"
+            ],
+            "provider": [
+              {
+                "id": "azure-content-understanding",
+                "description": "An HTTPS Azure AI Content Understanding endpoint and an Entra application authorized only for analysis."
+              }
+            ]
+          },
+          "readiness": {
+            "signals": [
+              "process",
+              "provider",
+              "workload"
+            ],
+            "summary": "Ready when local roots and worker dependencies are usable and provider authentication succeeds."
+          },
+          "stateEffects": [
+            "artifact-create"
+          ]
+        },
+        {
+          "id": "local-package",
+          "description": "Local stdio execution over explicitly allowed image roots with deterministic image operations and local OCR.",
+          "source": "capability-profile-declaration",
+          "dimensions": {
+            "execution": "local",
+            "delivery": "package",
+            "access": "local-process",
+            "workload": "filesystem",
+            "provider": "none",
+            "mutation": "mutating"
+          },
+          "permissions": {
+            "summary": "Read allowed local images, execute the capability-owned worker, and create principal-scoped artifacts.",
+            "scopes": [
+              "artifact-write",
+              "filesystem-read",
+              "process-execute"
+            ]
+          },
+          "prerequisites": {
+            "setupRequired": true,
+            "summary": "Requires allowed image roots and the local Python image worker; no provider or secret setup is required.",
+            "requiredSecrets": [],
+            "provider": []
+          },
+          "readiness": {
+            "signals": [
+              "process",
+              "workload"
+            ],
+            "summary": "Ready when an allowed image root and the required Python image dependencies are available."
+          },
+          "stateEffects": [
+            "artifact-create"
+          ]
+        }
+      ],
+      "bindings": [
+        {
+          "id": "hybrid-azure-stdio",
+          "profileId": "hybrid-azure-package",
+          "artifactId": "npm-package",
+          "interface": "stdio",
+          "availability": "hybrid"
+        },
+        {
+          "id": "local-stdio",
+          "profileId": "local-package",
+          "artifactId": "npm-package",
+          "interface": "stdio",
+          "availability": "local"
+        }
+      ],
+      "stateChanging": true,
+      "routing": {
+        "summary": "Use for bounded image analysis, OCR and layout extraction, image comparison, and optimized image-region artifacts."
+      },
+      "conformance": {
+        "status": "verified",
+        "checks": [
+          "capability-profile-v1",
+          "mcp-metadata",
+          "routing-metadata",
+          "runtime-contract"
+        ]
+      },
+      "source": {
+        "capabilityId": "io.github.ashergarland/agent-tool-server-vision",
+        "repository": "https://github.com/ashergarland/agent-tool-server-vision",
+        "revision": "833d97c76d92ca833650d826fb1348090df1d5a8",
+        "metadataVersion": "0.0.0-development",
+        "metadata": {
+          "server": "server.json",
+          "package": "package.json",
+          "profiles": "capability-profiles.json"
+        }
+      }
+    }
+  ]
+}

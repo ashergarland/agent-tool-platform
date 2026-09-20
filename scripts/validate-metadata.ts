@@ -14,8 +14,8 @@ import {
  * therefore does not apply to the manifests here, and applying it would invent a server identity
  * and a remote endpoint that do not exist. What is checked instead:
  *
- * - the two platform packages are publishable, because npm distribution is now the intended
- *   channel, and every other manifest in the workspace stays private,
+ * - runtime and testkit are publishable, because npm distribution is now the intended channel,
+ *   while the registry, repository root, and fixture stay private,
  * - every workspace package carries the same version as the root,
  * - no placeholder or fake-domain content has crept into a manifest,
  * - package identities and the testkit's exact runtime dependency remain internally consistent,
@@ -43,7 +43,11 @@ interface Manifest {
 
 /** The only manifests in this workspace that are meant to reach a registry. */
 const publishablePackages = ['packages/runtime/package.json', 'packages/testkit/package.json'];
-const privatePackages = ['package.json', 'examples/minimal-capability/package.json'];
+const privatePackages = [
+  'package.json',
+  'packages/capability-registry/package.json',
+  'examples/minimal-capability/package.json',
+];
 
 const load = async (path: string): Promise<Manifest> =>
   JSON.parse(await readFile(resolve(path), 'utf8')) as Manifest;
@@ -60,9 +64,20 @@ const exists = async (path: string): Promise<boolean> => {
 const failures: string[] = [];
 
 const root = await load('package.json');
+const capabilityRegistry = await load('packages/capability-registry/package.json');
 const runtime = await load('packages/runtime/package.json');
 const testkit = await load('packages/testkit/package.json');
 
+if (capabilityRegistry.name !== '@agent-tool-platform/capability-registry') {
+  failures.push(
+    `packages/capability-registry/package.json: unexpected package name ${capabilityRegistry.name}`,
+  );
+}
+if (capabilityRegistry.dependencies?.['@agent-tool-platform/agent-kit'] !== undefined) {
+  failures.push(
+    'packages/capability-registry/package.json: capability-registry must not depend on agent-kit',
+  );
+}
 if (runtime.name !== '@agent-tool-platform/runtime') {
   failures.push(`packages/runtime/package.json: unexpected package name ${runtime.name}`);
 }
@@ -94,9 +109,7 @@ for (const path of [...privatePackages, ...publishablePackages]) {
 for (const path of privatePackages) {
   const manifest = await load(path);
   if (manifest.private !== true) {
-    failures.push(
-      `${path}: must remain private; the repository root and fixtures are not products`,
-    );
+    failures.push(`${path}: must remain private`);
   }
 }
 
@@ -130,6 +143,7 @@ const documentation = [
   'README.md',
   'docs/releasing.md',
   'packages/runtime/README.md',
+  'packages/capability-registry/README.md',
   'packages/testkit/README.md',
 ];
 for (const path of documentation) {

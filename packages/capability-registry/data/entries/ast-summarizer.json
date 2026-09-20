@@ -1,0 +1,95 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+  "schemaVersion": "1.0.0",
+  "kind": "capability",
+  "id": "ast-summarizer",
+  "displayName": "AST Summarizer",
+  "description": "Read-only TypeScript and JavaScript declaration skeletons and local dependency graphs for one workspace.",
+  "publisher": {
+    "id": "ashergarland",
+    "displayName": "Asher Garland",
+    "url": "https://github.com/ashergarland"
+  },
+  "version": {
+    "value": "0.1.1",
+    "status": "released"
+  },
+  "artifacts": [
+    {
+      "id": "npm-package",
+      "kind": "npm",
+      "identifier": "@agent-tool-platform/ast-summarizer",
+      "version": "0.1.1",
+      "availability": "published",
+      "reference": "v0.1.1"
+    }
+  ],
+  "links": {
+    "repository": "https://github.com/ashergarland/agent-tool-server-ast-summarizer",
+    "documentation": "https://github.com/ashergarland/agent-tool-server-ast-summarizer#readme"
+  },
+  "category": {
+    "id": "development",
+    "displayName": "Development"
+  },
+  "tags": ["code", "context-optimization", "dependency-analysis", "typescript"],
+  "toolCount": 2,
+  "profiles": [
+    {
+      "id": "local-package",
+      "description": "Read-only local package execution over stdio against one TypeScript or JavaScript workspace.",
+      "source": "registry-curated",
+      "dimensions": {
+        "execution": "local",
+        "delivery": "package",
+        "access": "local-process",
+        "workload": "filesystem",
+        "provider": "none",
+        "mutation": "read-only"
+      },
+      "permissions": {
+        "summary": "Read files beneath the configured workspace root.",
+        "scopes": ["workspace-read"]
+      },
+      "prerequisites": {
+        "setupRequired": true,
+        "summary": "Requires a local TypeScript or JavaScript workspace; no provider or secret setup is required.",
+        "requiredSecrets": [],
+        "provider": []
+      },
+      "readiness": {
+        "signals": ["process", "workload"],
+        "summary": "Ready when the local process can read the configured workspace."
+      },
+      "stateEffects": []
+    }
+  ],
+  "bindings": [
+    {
+      "id": "local-stdio",
+      "profileId": "local-package",
+      "artifactId": "npm-package",
+      "interface": "stdio",
+      "availability": "local"
+    }
+  ],
+  "stateChanging": false,
+  "routing": {
+    "summary": "Use for TypeScript or JavaScript declarations, signatures, file skeletons, dependency structure, and codebase orientation."
+  },
+  "conformance": {
+    "status": "partial",
+    "checks": ["mcp-metadata", "routing-metadata", "runtime-contract"]
+  },
+  "source": {
+    "capabilityId": "io.github.ashergarland/agent-tool-server-ast-summarizer",
+    "repository": "https://github.com/ashergarland/agent-tool-server-ast-summarizer",
+    "revision": "93bffa78d3fbbb4d835a8da55f33af68e48ec8cd",
+    "metadataVersion": "0.0.0-development",
+    "releaseTag": "v0.1.1",
+    "metadata": {
+      "server": "server.json",
+      "package": "package.json"
+    }
+  }
+}

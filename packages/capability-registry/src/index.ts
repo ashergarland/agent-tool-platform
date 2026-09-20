@@ -1,0 +1,78 @@
+export {
+  DuplicateCapabilityIdError,
+  buildCapabilityRegistry,
+  createCapabilityRegistryReader,
+  normalizeCapabilityEntry,
+  serializeCapabilityRegistry,
+  type CapabilityRegistryReader,
+} from './registry.js';
+
+export {
+  CapabilityRegistryDataError,
+  checkFirstPartyRegistry,
+  generateFirstPartyRegistry,
+  loadCapabilityEntries,
+  readCapabilityEntryDocuments,
+  readJsonDocument,
+  writeFirstPartyRegistry,
+  type JsonDocumentResult,
+  type LoadedCapabilityDocument,
+  type LoadedCapabilityDocuments,
+  type RegistryDataIssue,
+} from './data.js';
+
+export {
+  CapabilityRegistryValidationError,
+  assertCapabilityRegistryDocument,
+  loadFirstPartyCapabilityRegistry,
+  validateAccountNeutrality,
+  validateCapabilityConsistency,
+  validateCapabilityEntryDocument,
+  validateCapabilityRegistryDocument,
+  validateStaticFirstPartyRegistry,
+  type CapabilityRegistryValidationResult,
+} from './validation.js';
+
+export {
+  verifyCapabilitySource,
+  verifyCapabilitySources,
+  type CapabilitySourceIssue,
+  type CapabilitySourceRoot,
+} from './source-validation.js';
+
+export {
+  capabilityArtifactSchema,
+  capabilityBindingSchema,
+  capabilityEntryJsonSchema,
+  capabilityEntryKind,
+  capabilityEntrySchema,
+  capabilityEntrySchemaId,
+  capabilityProfileSummarySchema,
+  capabilityRegistryJsonSchema,
+  capabilityRegistryKind,
+  capabilityRegistrySchema,
+  capabilityRegistrySchemaId,
+  capabilityRegistrySchemaVersion,
+  conformanceChecks,
+  accessDimensions,
+  deliveryDimensions,
+  deploymentProfileDimensionsSchema,
+  executionDimensions,
+  mutationDimensions,
+  permissionScopes,
+  providerDimensions,
+  readinessSignals,
+  stateEffects,
+  workloadDimensions,
+  type CapabilityArtifact,
+  type CapabilityBinding,
+  type CapabilityEntry,
+  type CapabilityProfileSummary,
+  type CapabilityRegistry,
+  type ConformanceCheck,
+  type DeploymentProfileDimensions,
+  type PermissionScope,
+  type ReadinessSignal,
+  type RegistryJsonSchema,
+  type StateEffect,
+} from './schema.js';

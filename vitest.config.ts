@@ -8,13 +8,16 @@ export default defineConfig({
     alias: {
       '@agent-tool-platform/runtime': resolvePath('./packages/runtime/src/index.ts'),
       '@agent-tool-platform/testkit': resolvePath('./packages/testkit/src/index.ts'),
+      '@agent-tool-platform/capability-registry': resolvePath(
+        './packages/capability-registry/src/index.ts',
+      ),
       '@agent-tool-platform/example-minimal-capability': resolvePath(
         './examples/minimal-capability/src/index.ts',
       ),
     },
   },
   test: {
-    include: ['tests/**/*.test.ts'],
+    include: ['tests/**/*.test.ts', 'packages/*/tests/**/*.test.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],

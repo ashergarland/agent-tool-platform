@@ -1,0 +1,95 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+  "schemaVersion": "1.0.0",
+  "kind": "capability",
+  "id": "doc-rag",
+  "displayName": "Documentation RAG",
+  "description": "Retrieve bounded evidence from one configured documentation corpus.",
+  "publisher": {
+    "id": "ashergarland",
+    "displayName": "Asher Garland",
+    "url": "https://github.com/ashergarland"
+  },
+  "version": {
+    "value": "0.0.0-development",
+    "status": "development"
+  },
+  "artifacts": [
+    {
+      "id": "npm-package",
+      "kind": "npm",
+      "identifier": "agent-tool-server-doc-rag",
+      "version": "0.0.0-development",
+      "availability": "declared",
+      "reference": "server.json#/packages/0"
+    }
+  ],
+  "links": {
+    "repository": "https://github.com/ashergarland/agent-tool-server-doc-rag",
+    "documentation": "https://github.com/ashergarland/agent-tool-server-doc-rag#readme"
+  },
+  "category": {
+    "id": "knowledge",
+    "displayName": "Knowledge"
+  },
+  "tags": ["context-optimization", "documentation", "provenance", "rag", "retrieval"],
+  "toolCount": 1,
+  "profiles": [
+    {
+      "id": "local-filesystem-package",
+      "description": "Read-only local package execution over stdio against one filesystem corpus.",
+      "source": "capability-profile-declaration",
+      "dimensions": {
+        "execution": "local",
+        "delivery": "package",
+        "access": "local-process",
+        "workload": "filesystem",
+        "provider": "none",
+        "mutation": "read-only"
+      },
+      "permissions": {
+        "summary": "Read documents beneath the configured documentation root.",
+        "scopes": ["filesystem-read"]
+      },
+      "prerequisites": {
+        "setupRequired": true,
+        "summary": "Requires a configured local documentation corpus; no provider or secret setup is required.",
+        "requiredSecrets": [],
+        "provider": []
+      },
+      "readiness": {
+        "signals": ["process", "workload"],
+        "summary": "Ready after the configured documentation root yields a validated non-empty index."
+      },
+      "stateEffects": []
+    }
+  ],
+  "bindings": [
+    {
+      "id": "local-stdio",
+      "profileId": "local-filesystem-package",
+      "artifactId": "npm-package",
+      "interface": "stdio",
+      "availability": "local"
+    }
+  ],
+  "stateChanging": false,
+  "routing": {
+    "summary": "Use for bounded, provenance-rich retrieval from one configured documentation corpus."
+  },
+  "conformance": {
+    "status": "verified",
+    "checks": ["capability-profile-v1", "mcp-metadata", "routing-metadata", "runtime-contract"]
+  },
+  "source": {
+    "capabilityId": "io.github.ashergarland/agent-tool-server-doc-rag",
+    "repository": "https://github.com/ashergarland/agent-tool-server-doc-rag",
+    "revision": "b4ead6e48d00c14b59089e7169cb03ac6f57b181",
+    "metadataVersion": "0.0.0-development",
+    "metadata": {
+      "server": "server.json",
+      "package": "package.json",
+      "profiles": "capability-profiles.json"
+    }
+  }
+}

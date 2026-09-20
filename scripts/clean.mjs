@@ -5,6 +5,8 @@ const repositoryRoot = resolve(import.meta.dirname, '..');
 const targets = [
   'coverage',
   'openapi.fixture.json',
+  'packages/capability-registry/dist',
+  'packages/capability-registry/tsconfig.build.tsbuildinfo',
   'packages/runtime/dist',
   'packages/runtime/tsconfig.build.tsbuildinfo',
   'packages/testkit/dist',

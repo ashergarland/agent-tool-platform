@@ -16,7 +16,12 @@ export default tseslint.config(
     },
   },
   {
-    files: ['tests/**/*.ts', 'scripts/**/*.ts', 'packages/testkit/src/**/*.ts'],
+    files: [
+      'tests/**/*.ts',
+      'scripts/**/*.ts',
+      'packages/*/tests/**/*.ts',
+      'packages/testkit/src/**/*.ts',
+    ],
     rules: {
       'no-console': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',

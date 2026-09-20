@@ -1,0 +1,95 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
+  "schemaVersion": "1.0.0",
+  "kind": "capability",
+  "id": "data-cruncher",
+  "displayName": "Data Cruncher",
+  "description": "Reduce large local JSON, JSONL, log, and text files with bounded jq and ripgrep tools.",
+  "publisher": {
+    "id": "ashergarland",
+    "displayName": "Asher Garland",
+    "url": "https://github.com/ashergarland"
+  },
+  "version": {
+    "value": "0.0.0-development",
+    "status": "development"
+  },
+  "artifacts": [
+    {
+      "id": "npm-package",
+      "kind": "npm",
+      "identifier": "agent-tool-server-data-cruncher",
+      "version": "0.0.0-development",
+      "availability": "declared",
+      "reference": "server.json#/packages/0"
+    }
+  ],
+  "links": {
+    "repository": "https://github.com/ashergarland/agent-tool-server-data-cruncher",
+    "documentation": "https://github.com/ashergarland/agent-tool-server-data-cruncher#readme"
+  },
+  "category": {
+    "id": "data",
+    "displayName": "Data"
+  },
+  "tags": ["context-optimization", "data", "jq", "logs", "ripgrep"],
+  "toolCount": 2,
+  "profiles": [
+    {
+      "id": "local-package",
+      "description": "Read-only local package execution over stdio against one explicitly selected filesystem root.",
+      "source": "capability-profile-declaration",
+      "dimensions": {
+        "execution": "local",
+        "delivery": "package",
+        "access": "local-process",
+        "workload": "filesystem",
+        "provider": "none",
+        "mutation": "read-only"
+      },
+      "permissions": {
+        "summary": "Read one selected local data file and execute bounded jq or ripgrep subprocesses.",
+        "scopes": ["filesystem-read", "process-execute"]
+      },
+      "prerequisites": {
+        "setupRequired": true,
+        "summary": "Requires a configured data root plus supported jq and ripgrep executables; no provider or secret setup is required.",
+        "requiredSecrets": [],
+        "provider": []
+      },
+      "readiness": {
+        "signals": ["process", "workload"],
+        "summary": "Ready when the data root, jq, and ripgrep are usable."
+      },
+      "stateEffects": []
+    }
+  ],
+  "bindings": [
+    {
+      "id": "local-stdio",
+      "profileId": "local-package",
+      "artifactId": "npm-package",
+      "interface": "stdio",
+      "availability": "local"
+    }
+  ],
+  "stateChanging": false,
+  "routing": {
+    "summary": "Use for bounded jq reduction and ripgrep search over large local JSON, JSONL, log, or text files."
+  },
+  "conformance": {
+    "status": "verified",
+    "checks": ["capability-profile-v1", "mcp-metadata", "routing-metadata", "runtime-contract"]
+  },
+  "source": {
+    "capabilityId": "io.github.ashergarland/agent-tool-server-data-cruncher",
+    "repository": "https://github.com/ashergarland/agent-tool-server-data-cruncher",
+    "revision": "67bc95dd4ba9d2b8ae829650d470a055819121f1",
+    "metadataVersion": "0.0.0-development",
+    "metadata": {
+      "server": "server.json",
+      "package": "package.json",
+      "profiles": "capability-profiles.json"
+    }
+  }
+}
