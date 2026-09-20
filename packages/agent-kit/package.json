@@ -8,6 +8,25 @@
   "engines": {
     "node": ">=22.0.0"
   },
+  "homepage": "https://github.com/ashergarland/agent-tool-platform/tree/main/packages/agent-kit#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ashergarland/agent-tool-platform.git",
+    "directory": "packages/agent-kit"
+  },
+  "bugs": {
+    "url": "https://github.com/ashergarland/agent-tool-platform/issues"
+  },
+  "keywords": [
+    "agent-tools",
+    "agent-composition",
+    "capability-registry",
+    "mcp"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

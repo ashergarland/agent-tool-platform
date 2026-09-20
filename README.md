@@ -8,10 +8,10 @@ behaviour: no ASTs, no repositories, no Azure resources, no documents, no images
 capability mechanics and the host-neutral composition layer so capabilities and agents can reuse
 contracts without duplicating runtimes or host-specific state.
 
-> **Status: v0 foundation.** Runtime and testkit 0.1.0 are publicly available from npm. No
-> infrastructure has been deployed. Future versions are published only from intentional release
-> tags; see [`docs/releasing.md`](docs/releasing.md). AST Summarizer is the planned first real
-> consumer, in the next phase.
+> **Status: v0 foundation.** Runtime and Testkit 0.1.3 are publicly available from npm. Capability
+> Registry and Agent Kit are prepared for, but have not completed, their one-time public-package
+> bootstrap. No infrastructure has been deployed. Future four-package versions are published only
+> from intentional release tags; see [`docs/releasing.md`](docs/releasing.md).
 
 ---
 
@@ -102,9 +102,10 @@ against the runtime deployment contract. Agent Kit consumes the registry through
 
 ### Installation
 
-Runtime and testkit are public and scoped to `@agent-tool-platform` on the primary npm registry.
-Capability Registry and Agent Kit remain checked-in private workspace packages for this
-implementation slice.
+Runtime and Testkit are public and scoped to `@agent-tool-platform` on the primary npm registry.
+Capability Registry and Agent Kit keep `private: true` in checked-in development manifests until
+the release stamper removes that guard in an ephemeral candidate. Their first publication remains
+an explicit operator bootstrap; the commands below become consumer commands after that bootstrap.
 
 ```bash
 # production capability dependency
@@ -112,17 +113,26 @@ npm install @agent-tool-platform/runtime
 
 # capability development and tests
 npm install -D @agent-tool-platform/testkit
+
+# M5.5 composition tooling, after its one-time bootstrap
+npm install @agent-tool-platform/capability-registry@X.Y.Z
+npm install @agent-tool-platform/agent-kit@X.Y.Z
 ```
 
-For v0 the two packages are released in lockstep, so when both are used they must be the same
-version — the testkit depends on exactly `@agent-tool-platform/runtime@<its own version>`:
+For v0 all four packages are released in lockstep. Testkit depends exactly on Runtime, and Agent Kit
+depends exactly on Runtime and Capability Registry at its own version:
 
-| Version | `@agent-tool-platform/runtime` | `@agent-tool-platform/testkit` |
-| ------- | ------------------------------ | ------------------------------ |
-| 0.1.0   | 0.1.0                          | 0.1.0                          |
+| Release state              | Runtime | Registry | Agent Kit | Testkit |
+| -------------------------- | ------- | -------- | --------- | ------- |
+| Current public baseline    | 0.1.3   | —        | —         | 0.1.3   |
+| First four-package release | X.Y.Z   | X.Y.Z    | X.Y.Z     | X.Y.Z   |
 
-Installing a mismatched pair (for example testkit 0.1.0 with runtime 0.2.0) is unsupported: npm will
-install a second copy of the runtime for the testkit, and the two will not share types or instances.
+Installing mismatched Platform versions is unsupported. npm may install duplicate Runtime or
+Registry copies, and the packages would no longer share one compatibility contract.
+
+The future `agent-composition-template` consumer must pin Registry and Agent Kit to a real published
+Platform version. It must not use `file:` dependencies, copied Platform source, or a sibling
+checkout.
 
 `examples/minimal-capability` and this repository's root package stay private and are never
 published.
@@ -679,11 +689,11 @@ npm run metadata:validate
 
 Coverage floor: 80% lines, 80% functions, 80% statements, 70% branches.
 
-`package:smoke` packs both publishable packages, installs the tarballs into throwaway projects
-outside this repository, and imports every documented entry point there, so workspace resolution
-cannot mask a broken package. `release:check` asserts the runtime and testkit versions match, that
-the testkit's runtime dependency is exactly that version, and that both manifests describe a public
-npm package in this repository. Neither touches the network or publishes anything.
+`package:smoke` packs all four package candidates, exercises isolated consumers outside this
+repository, performs real external npm installs for Registry and Agent Kit, and builds a
+deterministic installed Agent Kit composition. `release:check` asserts four-package lockstep,
+exact internal dependencies, publication metadata, and development publication guards. Neither
+publishes anything.
 
 ---
 
@@ -707,12 +717,13 @@ git push origin vX.Y.Z
 
 That's it. The tag is the release version. The
 [Publish workflow](.github/workflows/publish.yml) validates and stamps the exact tagged commit,
-publishes runtime before testkit through npm Trusted Publishing, verifies both packages from npm,
-and creates the GitHub Release with generated notes. Ordinary pushes, pull requests, and merges do
-not publish. No manifest, lockfile, changelog, release-note, or release commit is needed.
+publishes Runtime, Capability Registry, Agent Kit, and Testkit in dependency-safe order through npm
+Trusted Publishing, verifies all four packages from npm, and creates the GitHub Release with
+generated notes. Ordinary pushes, pull requests, and merges do not publish. No manifest, lockfile,
+changelog, release-note, or release commit is needed.
 
-See [`docs/releasing.md`](docs/releasing.md) for the completed one-time 0.1.0 bootstrap and the
-secondary dry-run and partial-recovery procedures.
+See [`docs/releasing.md`](docs/releasing.md) for the historical Runtime/Testkit bootstrap, the
+pending Registry/Agent Kit bootstrap, and the dry-run and state-machine recovery procedures.
 
 ---
 

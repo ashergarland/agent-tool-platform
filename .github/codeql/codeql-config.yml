@@ -7,9 +7,9 @@
 name: agent-tool-platform
 
 paths-ignore:
-  # Test sources are never shipped: both packages declare `files: ["dist", "bin", "README.md"]`,
-  # so nothing under `tests/` can reach a consumer. They also deliberately construct credentials
-  # and log them into redacted positions in order to prove redaction works, which every
+  # Test sources are never shipped: every public package has an explicit `files` allowlist, so
+  # nothing under `tests/` can reach a consumer. Tests also deliberately construct credentials and
+  # log them into redacted positions in order to prove redaction works, which every
   # credential-handling rule reads as a finding.
   - tests
   - '**/dist'

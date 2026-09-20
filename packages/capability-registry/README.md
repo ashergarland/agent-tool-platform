@@ -7,8 +7,15 @@ and a small read API for consumers such as `@agent-tool-platform/agent-kit`.
 It describes **capabilities**, not individual MCP tools. Tool input/output schemas and domain
 behavior remain authoritative in each capability repository.
 
-The package is private and unpublished in this Hackathon slice. Its checked-in JSON data and TypeScript
-API are consumed from the Platform workspace; no runtime network registry is required.
+The package is prepared for public npm distribution but has not completed its one-time bootstrap.
+Its checked-in manifest deliberately remains private; release stamping removes that guard only in
+an ephemeral candidate. After bootstrap, consumers install the exact Platform release:
+
+```bash
+npm install @agent-tool-platform/capability-registry@X.Y.Z
+```
+
+No runtime network registry is required; the versioned package carries its static data.
 
 ## Contents
 

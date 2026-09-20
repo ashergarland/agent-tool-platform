@@ -13,6 +13,8 @@ const temporaryRoots: string[] = [];
 
 interface VersionMetadata {
   version: string;
+  private?: boolean;
+  registryVersion?: string;
   dependencies?: Record<string, string>;
   readonly packages?: Record<string, VersionMetadata>;
 }
@@ -25,6 +27,7 @@ const releaseFiles = [
   'package-lock.json',
   'packages/agent-kit/package.json',
   'packages/capability-registry/package.json',
+  'packages/capability-registry/data/first-party-registry.json',
   'packages/runtime/package.json',
   'packages/testkit/package.json',
   'examples/minimal-capability/package.json',
@@ -56,8 +59,20 @@ const createReleaseFixture = (): string => {
     if (manifest.dependencies?.[capabilityRegistryName]) {
       manifest.dependencies[capabilityRegistryName] = developmentVersion;
     }
+    if (
+      path === 'packages/agent-kit/package.json' ||
+      path === 'packages/capability-registry/package.json'
+    ) {
+      manifest.private = true;
+    }
     writeFileSync(join(root, path), `${JSON.stringify(manifest, undefined, 2)}\n`);
   }
+  const registry = readJson(root, 'packages/capability-registry/data/first-party-registry.json');
+  registry.registryVersion = developmentVersion;
+  writeFileSync(
+    join(root, 'packages/capability-registry/data/first-party-registry.json'),
+    `${JSON.stringify(registry, undefined, 2)}\n`,
+  );
   return root;
 };
 
@@ -73,6 +88,10 @@ describe('release version stamping', () => {
       repositoryRoot,
       'packages/capability-registry/package.json',
     );
+    const registryData = readJson(
+      repositoryRoot,
+      'packages/capability-registry/data/first-party-registry.json',
+    );
     const runtime = readJson(repositoryRoot, 'packages/runtime/package.json');
     const testkit = readJson(repositoryRoot, 'packages/testkit/package.json');
     const fixture = readJson(repositoryRoot, 'examples/minimal-capability/package.json');
@@ -84,6 +103,11 @@ describe('release version stamping', () => {
     }
     expect(agentKit.dependencies?.[runtimeName]).toBe(expectedVersion);
     expect(agentKit.dependencies?.[capabilityRegistryName]).toBe(expectedVersion);
+    expect(agentKit.private).toBe(expectedVersion === developmentVersion ? true : undefined);
+    expect(capabilityRegistry.private).toBe(
+      expectedVersion === developmentVersion ? true : undefined,
+    );
+    expect(registryData.registryVersion).toBe(expectedVersion);
     expect(testkit.dependencies?.[runtimeName]).toBe(expectedVersion);
     expect(fixture.dependencies?.[runtimeName]).toBe(expectedVersion);
     expect(lock.version).toBe(developmentVersion);
@@ -133,6 +157,10 @@ describe('release version stamping', () => {
     const repository = readJson(root, 'package.json');
     const agentKit = readJson(root, 'packages/agent-kit/package.json');
     const capabilityRegistry = readJson(root, 'packages/capability-registry/package.json');
+    const registryData = readJson(
+      root,
+      'packages/capability-registry/data/first-party-registry.json',
+    );
     const runtime = readJson(root, 'packages/runtime/package.json');
     const testkit = readJson(root, 'packages/testkit/package.json');
     const fixture = readJson(root, 'examples/minimal-capability/package.json');
@@ -141,7 +169,10 @@ describe('release version stamping', () => {
     expect(agentKit.version).toBe('1.2.3');
     expect(agentKit.dependencies?.[runtimeName]).toBe('1.2.3');
     expect(agentKit.dependencies?.[capabilityRegistryName]).toBe('1.2.3');
+    expect(agentKit.private).toBeUndefined();
     expect(capabilityRegistry.version).toBe('1.2.3');
+    expect(capabilityRegistry.private).toBeUndefined();
+    expect(registryData.registryVersion).toBe('1.2.3');
     expect(runtime.version).toBe('1.2.3');
     expect(testkit.version).toBe('1.2.3');
     expect(testkit.dependencies?.[runtimeName]).toBe('1.2.3');
@@ -156,6 +187,7 @@ describe('release version stamping', () => {
     );
     expect(checkOutput).toContain('Release check passed for 1.2.3');
     expect(checkOutput).toContain(`${runtimeName}@1.2.3`);
+    expect(checkOutput).toContain(`${capabilityRegistryName}@1.2.3`);
   });
 
   it.each(['v1.2.3', '1.2', '01.2.3', '1.2.3-alpha.01', developmentVersion])(
@@ -172,4 +204,107 @@ describe('release version stamping', () => {
       expect(readFileSync(join(root, 'package.json'))).toEqual(before);
     },
   );
+});
+
+describe('release registry state', () => {
+  const releaseCommit = 'a'.repeat(40);
+  const version = '1.2.3';
+  const stateScript = join(repositoryRoot, 'scripts', 'release-registry-state.mjs');
+  const packageMetadata = (
+    directory: string,
+    dependencies: Record<string, string> = {},
+  ): Record<string, unknown> => ({
+    version,
+    gitHead: releaseCommit,
+    repository: {
+      type: 'git',
+      url: 'git+https://github.com/ashergarland/agent-tool-platform.git',
+      directory,
+    },
+    dependencies,
+    'dist.integrity': 'sha512-release-fixture',
+  });
+  const runState = (metadata: Record<string, unknown>) => {
+    const root = mkdtempSync(join(tmpdir(), 'atp-registry-state-'));
+    temporaryRoots.push(root);
+    const fixture = join(root, 'registry.json');
+    writeFileSync(
+      fixture,
+      `${JSON.stringify({
+        registry: metadata,
+        localIntegrities: Object.fromEntries(
+          [
+            '@agent-tool-platform/runtime',
+            '@agent-tool-platform/capability-registry',
+            '@agent-tool-platform/agent-kit',
+            '@agent-tool-platform/testkit',
+          ].map((name) => [name, 'sha512-release-fixture']),
+        ),
+      })}\n`,
+    );
+    return spawnSync(process.execPath, [stateScript, version, releaseCommit], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      env: { ...process.env, ATP_RELEASE_REGISTRY_FIXTURE: fixture },
+    });
+  };
+
+  it('classifies an empty release and a valid published prefix', () => {
+    const empty = runState({});
+    expect(empty.status).toBe(0);
+    expect(empty.stdout).toContain('state=absent');
+    expect(empty.stdout).toContain('published_count=0');
+
+    const prefix = runState({
+      '@agent-tool-platform/runtime': packageMetadata('packages/runtime'),
+      '@agent-tool-platform/capability-registry': packageMetadata('packages/capability-registry'),
+      '@agent-tool-platform/agent-kit': packageMetadata('packages/agent-kit', {
+        '@agent-tool-platform/runtime': version,
+        '@agent-tool-platform/capability-registry': version,
+      }),
+    });
+    expect(prefix.status).toBe(0);
+    expect(prefix.stdout).toContain('state=partial');
+    expect(prefix.stdout).toContain('published_count=3');
+    expect(prefix.stdout).toContain('missing_suffix=@agent-tool-platform/testkit');
+  });
+
+  it('refuses out-of-order, wrong-source, and inconsistent dependency states', () => {
+    const outOfOrder = runState({
+      '@agent-tool-platform/runtime': packageMetadata('packages/runtime'),
+      '@agent-tool-platform/agent-kit': packageMetadata('packages/agent-kit', {
+        '@agent-tool-platform/runtime': version,
+        '@agent-tool-platform/capability-registry': version,
+      }),
+    });
+    expect(outOfOrder.status).not.toBe(0);
+    expect(outOfOrder.stderr).toContain('Unsafe release state');
+
+    const wrongSource = packageMetadata('packages/runtime');
+    wrongSource.gitHead = 'b'.repeat(40);
+    const sourceResult = runState({
+      '@agent-tool-platform/runtime': wrongSource,
+    });
+    expect(sourceResult.status).not.toBe(0);
+    expect(sourceResult.stderr).toContain('expected');
+
+    const wrongDependency = runState({
+      '@agent-tool-platform/runtime': packageMetadata('packages/runtime'),
+      '@agent-tool-platform/capability-registry': packageMetadata('packages/capability-registry'),
+      '@agent-tool-platform/agent-kit': packageMetadata('packages/agent-kit', {
+        '@agent-tool-platform/runtime': developmentVersion,
+        '@agent-tool-platform/capability-registry': version,
+      }),
+    });
+    expect(wrongDependency.status).not.toBe(0);
+    expect(wrongDependency.stderr).toContain('unexpected internal dependency');
+
+    const wrongIntegrity = packageMetadata('packages/runtime');
+    wrongIntegrity['dist.integrity'] = 'sha512-different-artifact';
+    const integrityResult = runState({
+      '@agent-tool-platform/runtime': wrongIntegrity,
+    });
+    expect(integrityResult.status).not.toBe(0);
+    expect(integrityResult.stderr).toContain('tagged candidate integrity');
+  });
 });

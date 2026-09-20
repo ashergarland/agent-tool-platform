@@ -14,8 +14,8 @@ import {
  * therefore does not apply to the manifests here, and applying it would invent a server identity
  * and a remote endpoint that do not exist. What is checked instead:
  *
- * - runtime and testkit are publishable, because npm distribution is now the intended channel,
- *   while the registry, repository root, and fixture stay private,
+ * - all four platform packages carry public npm metadata, while the two new packages stay private
+ *   in checked-in development metadata and the repository root and fixture stay private always,
  * - every workspace package carries the same version as the root,
  * - no placeholder or fake-domain content has crept into a manifest,
  * - package identities and the testkit's exact runtime dependency remain internally consistent,
@@ -41,13 +41,17 @@ interface Manifest {
   readonly dependencies?: Record<string, string>;
 }
 
-/** The only manifests in this workspace that are meant to reach a registry. */
-const publishablePackages = ['packages/runtime/package.json', 'packages/testkit/package.json'];
-const privatePackages = [
-  'package.json',
+/** The manifests in this workspace that are released together to the primary npm registry. */
+const publishablePackages = [
+  'packages/runtime/package.json',
+  'packages/capability-registry/package.json',
+  'packages/agent-kit/package.json',
+  'packages/testkit/package.json',
+];
+const privatePackages = ['package.json', 'examples/minimal-capability/package.json'];
+const developmentPrivatePackages = [
   'packages/agent-kit/package.json',
   'packages/capability-registry/package.json',
-  'examples/minimal-capability/package.json',
 ];
 
 const load = async (path: string): Promise<Manifest> =>
@@ -77,6 +81,11 @@ if (capabilityRegistry.name !== '@agent-tool-platform/capability-registry') {
 }
 if (agentKit.name !== '@agent-tool-platform/agent-kit') {
   failures.push(`packages/agent-kit/package.json: unexpected package name ${agentKit.name}`);
+}
+if (agentKit.dependencies?.['@agent-tool-platform/runtime'] !== runtime.version) {
+  failures.push(
+    'packages/agent-kit/package.json: must depend exactly on the workspace runtime version',
+  );
 }
 if (
   agentKit.dependencies?.['@agent-tool-platform/capability-registry'] !== capabilityRegistry.version
@@ -127,8 +136,15 @@ for (const path of privatePackages) {
 
 for (const path of publishablePackages) {
   const manifest = await load(path);
-  if (manifest.private === true) {
-    failures.push(`${path}: is private but is one of the two packages this repository distributes`);
+  const developmentPrivate = developmentPrivatePackages.includes(path);
+  if (root.version === '0.0.0-development' && developmentPrivate && manifest.private !== true) {
+    failures.push(`${path}: must remain private until release metadata is stamped`);
+  }
+  if (root.version !== '0.0.0-development' && manifest.private !== undefined) {
+    failures.push(`${path}: a stamped release candidate must not declare private`);
+  }
+  if (!developmentPrivate && manifest.private !== undefined) {
+    failures.push(`${path}: an established public package must not declare private`);
   }
   if (manifest.publishConfig?.access !== 'public') {
     failures.push(`${path}: declares npm distribution without public access`);
@@ -151,14 +167,7 @@ if (await exists('server.json')) {
   );
 }
 
-const documentation = [
-  'README.md',
-  'docs/releasing.md',
-  'packages/runtime/README.md',
-  'packages/agent-kit/README.md',
-  'packages/capability-registry/README.md',
-  'packages/testkit/README.md',
-];
+const documentation = ['packages/runtime/README.md', 'packages/testkit/README.md'];
 for (const path of documentation) {
   if (!(await exists(path))) continue;
   const contents = await readFile(resolve(path), 'utf8');
@@ -170,8 +179,15 @@ for (const path of documentation) {
 const installationDocumentation: readonly (readonly [string, string])[] = [
   ['README.md', 'npm install @agent-tool-platform/runtime'],
   ['README.md', 'npm install -D @agent-tool-platform/testkit'],
+  ['README.md', 'npm install @agent-tool-platform/capability-registry'],
+  ['README.md', 'npm install @agent-tool-platform/agent-kit'],
   ['packages/runtime/README.md', 'npm install @agent-tool-platform/runtime'],
   ['packages/testkit/README.md', 'npm install -D @agent-tool-platform/testkit'],
+  [
+    'packages/capability-registry/README.md',
+    'npm install @agent-tool-platform/capability-registry',
+  ],
+  ['packages/agent-kit/README.md', 'npm install @agent-tool-platform/agent-kit'],
 ];
 for (const [path, command] of installationDocumentation) {
   const contents = await readFile(resolve(path), 'utf8');
@@ -242,6 +258,6 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    'Workspace metadata is consistent: the two platform packages are publishable, versioned in lockstep, documented with their real npm identities, everything else stays private, and the shared capability validator still behaves correctly.\n',
+    'Workspace metadata is consistent: four platform package candidates are versioned in lockstep, the new candidates remain private until stamping, installation is documented with real npm identities, non-products stay private, and the shared capability validator still behaves correctly.\n',
   );
 }

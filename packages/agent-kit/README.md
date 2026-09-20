@@ -7,8 +7,14 @@ capability releases through a narrow registry reader, selects a compatible six-d
 capability profile, generates `agent.lock`, composes bounded instructions, produces a readiness
 plan, and delegates host files to an adapter.
 
-The package and its sibling first-party registry remain private workspace packages. Neither is
-published or deployed by this implementation.
+The package and its sibling first-party registry are prepared for public npm distribution but have
+not completed their one-time bootstrap. Their checked-in manifests deliberately stay private;
+release stamping removes those guards only in an ephemeral candidate. After bootstrap, an agent
+composition repository installs the exact lockstep Platform release:
+
+```bash
+npm install @agent-tool-platform/agent-kit@X.Y.Z
+```
 
 ## Boundary
 
