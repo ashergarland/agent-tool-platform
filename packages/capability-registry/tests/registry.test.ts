@@ -260,7 +260,9 @@ describe('registry semantic validation', () => {
     ['local path', 'C:\\Users\\operator\\private-config.json'],
     ['account identifier', '00000000-1111-4111-8111-222222222222'],
     ['private endpoint', 'https://service.privatelink.database.windows.net'],
+    ['private IPv4 endpoint', 'https://192.168.1.1/private'],
     ['private IPv6 endpoint', 'https://[fd00::1]'],
+    ['link-local IPv6 endpoint', 'https://[fe80::1]/private'],
     ['IPv4-mapped private endpoint', 'https://[::ffff:127.0.0.1]'],
     ['secret value', 'api_key=do-not-store-this'],
   ])('rejects account-specific %s data', async (_label, value) => {
@@ -270,6 +272,31 @@ describe('registry semantic validation', () => {
     expect(validateAccountNeutrality([entry]).join('\n')).not.toBe('');
     expect(validateCapabilityEntryDocument(entry).valid).toBe(false);
   });
+
+  it.each([
+    ['localhost', 'https://localhost./private'],
+    ['internal', 'https://service.internal./private'],
+    ['local', 'https://printer.local./private'],
+    ['Private Link', 'https://service.privatelink.database.windows.net./private'],
+    ['multiple trailing dots', 'https://localhost.../private'],
+  ])('rejects trailing-dot private %s endpoints', async (_label, value) => {
+    const registry = await loadFirstPartyCapabilityRegistry();
+    const entry = clone(registry.capabilities[0]!);
+    entry.routing.summary = value;
+    expect(validateAccountNeutrality([entry]).join('\n')).toContain('private endpoint');
+    expect(validateCapabilityEntryDocument(entry).valid).toBe(false);
+  });
+
+  it.each(['https://example.com/public', 'https://example.com./public'])(
+    'accepts account-neutral public endpoint %s',
+    async (value) => {
+      const registry = await loadFirstPartyCapabilityRegistry();
+      const entry = clone(registry.capabilities[0]!);
+      entry.routing.summary = value;
+      expect(validateAccountNeutrality([entry])).toEqual([]);
+      expect(validateCapabilityEntryDocument(entry).valid).toBe(true);
+    },
+  );
 });
 
 describe('Agent Kit read seam', () => {

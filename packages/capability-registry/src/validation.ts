@@ -108,7 +108,7 @@ const privateIpv4Address = (address: string): boolean => {
 };
 
 const privateHostname = (hostname: string): boolean => {
-  const normalized = hostname.toLowerCase();
+  const normalized = hostname.toLowerCase().replace(/\.+$/u, '');
   const address = normalized.replace(/^\[|\]$/gu, '');
   if (
     normalized === 'localhost' ||
