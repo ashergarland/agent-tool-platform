@@ -8,10 +8,10 @@ import { join, resolve } from 'node:path';
  * and never contacts a registry. It answers a single question: if someone published right now,
  * would the result be coherent?
  *
- * For v0 the runtime and the testkit are versioned in lockstep and the testkit depends on the exact
- * runtime version. That is the invariant most likely to rot silently, because a mismatch still
- * builds, still tests, and still packs inside this workspace — the workspace resolves the local
- * runtime regardless of what the dependency range says. It only breaks for a consumer.
+ * For v0 the four platform packages are versioned in lockstep and internal package dependencies are
+ * exact. Those invariants are likely to rot silently because a mismatch still builds, tests, and
+ * packs inside this workspace — npm workspaces resolve local packages regardless of what the
+ * dependency range says. It only breaks for an external consumer.
  */
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
@@ -49,9 +49,12 @@ const read = (relativePath) => JSON.parse(readFileSync(join(repositoryRoot, rela
 const root = read('package.json');
 const agentKit = read('packages/agent-kit/package.json');
 const capabilityRegistry = read('packages/capability-registry/package.json');
+const capabilityRegistryData = read('packages/capability-registry/data/first-party-registry.json');
 const fixture = read('examples/minimal-capability/package.json');
 const publishable = [
   { name: runtimeName, directory: 'packages/runtime' },
+  { name: capabilityRegistryName, directory: 'packages/capability-registry' },
+  { name: agentKitName, directory: 'packages/agent-kit' },
   { name: testkitName, directory: 'packages/testkit' },
 ];
 const manifests = new Map(
@@ -66,8 +69,15 @@ for (const { name, directory } of publishable) {
   if (!semanticVersion.test(manifest.version ?? '')) {
     fail(`${label}: version ${manifest.version} is not a semantic version`);
   }
-  if (manifest.private !== undefined) {
-    fail(`${label}: still declares "private"; a publishable package must not`);
+  const developmentPrivate = name === capabilityRegistryName || name === agentKitName;
+  if (expectedVersion && manifest.private !== undefined) {
+    fail(`${label}: still declares "private"; a stamped release candidate must not`);
+  }
+  if (!expectedVersion && developmentPrivate && manifest.private !== true) {
+    fail(`${label}: must remain private until release metadata is stamped`);
+  }
+  if (!expectedVersion && !developmentPrivate && manifest.private !== undefined) {
+    fail(`${label}: must not declare "private"`);
   }
   if (manifest.publishConfig?.access !== 'public') {
     fail(`${label}: publishConfig.access must be "public" for a scoped package`);
@@ -102,6 +112,8 @@ for (const { name, directory } of publishable) {
 
 const runtime = manifests.get(runtimeName);
 const testkit = manifests.get(testkitName);
+const publishedAgentKit = manifests.get(agentKitName);
+const publishedCapabilityRegistry = manifests.get(capabilityRegistryName);
 const requiredVersion = expectedVersion ?? developmentVersion;
 
 for (const [label, manifest] of [
@@ -116,13 +128,21 @@ for (const [label, manifest] of [
     fail(`${label}: version ${manifest.version} must be ${requiredVersion}`);
   }
 }
-
-// v0 ships the pair together: one version, one compatibility story.
-if (runtime.version !== testkit.version) {
+if (capabilityRegistryData.registryVersion !== requiredVersion) {
   fail(
-    `${runtimeName}@${runtime.version} and ${testkitName}@${testkit.version} must match; ` +
-      'the platform packages are released in lockstep for v0',
+    `packages/capability-registry/data/first-party-registry.json: registryVersion ` +
+      `${capabilityRegistryData.registryVersion} must be ${requiredVersion}`,
   );
+}
+
+// v0 ships all four packages together: one version and one compatibility story.
+const platformVersions = new Set(
+  [runtime, testkit, publishedAgentKit, publishedCapabilityRegistry].map(
+    (manifest) => manifest.version,
+  ),
+);
+if (platformVersions.size !== 1) {
+  fail(`platform package versions must match for v0; found ${[...platformVersions].join(', ')}`);
 }
 if (root.version !== runtime.version) {
   fail(`the repository version ${root.version} does not match the packages ${runtime.version}`);
@@ -157,27 +177,49 @@ if (agentKit.dependencies?.[capabilityRegistryName] !== capabilityRegistry.versi
     } but the workspace registry is ${capabilityRegistry.version}`,
   );
 }
-if (
-  capabilityRegistry.dependencies?.[agentKitName] ||
-  capabilityRegistry.devDependencies?.[agentKitName]
-) {
-  fail(`${capabilityRegistryName} must never depend on ${agentKitName}`);
+
+const expectedInternalDependencies = new Map([
+  [runtimeName, new Map()],
+  [capabilityRegistryName, new Map()],
+  [testkitName, new Map([[runtimeName, runtime.version]])],
+  [
+    agentKitName,
+    new Map([
+      [runtimeName, runtime.version],
+      [capabilityRegistryName, capabilityRegistry.version],
+    ]),
+  ],
+]);
+for (const [name, manifest] of manifests) {
+  const expectedDependencies = expectedInternalDependencies.get(name);
+  for (const field of ['dependencies', 'devDependencies', 'peerDependencies']) {
+    for (const [dependency, range] of Object.entries(manifest[field] ?? {})) {
+      if (!dependency.startsWith('@agent-tool-platform/')) continue;
+      if (field !== 'dependencies' || expectedDependencies?.get(dependency) !== range) {
+        fail(
+          `${name} declares unexpected internal ${field} entry ${dependency}@${range}; ` +
+            'the v0 package graph must remain acyclic and exact',
+        );
+      }
+      if (expectedVersion && range === developmentVersion) {
+        fail(`${name} leaks ${dependency}@${developmentVersion} into a release candidate`);
+      }
+    }
+  }
 }
 
-if (
-  runtime.dependencies?.[testkitName] ||
-  runtime.devDependencies?.[testkitName] ||
-  runtime.dependencies?.[agentKitName] ||
-  runtime.devDependencies?.[agentKitName]
-) {
-  fail(`${runtimeName} must never depend on ${testkitName} or ${agentKitName}`);
+for (const [name, expectedDependencies] of expectedInternalDependencies) {
+  const manifest = manifests.get(name);
+  for (const [dependency, version] of expectedDependencies) {
+    if (manifest.dependencies?.[dependency] !== version) {
+      fail(`${name} must depend exactly on ${dependency}@${version}`);
+    }
+  }
 }
 
 // The repository itself and its fixtures stay unpublishable.
 for (const [path, manifest] of [
   ['package.json', root],
-  ['packages/agent-kit/package.json', agentKit],
-  ['packages/capability-registry/package.json', capabilityRegistry],
   ['examples/minimal-capability/package.json', fixture],
 ]) {
   if (manifest.private !== true) fail(`${path}: must remain private; it is not a product`);
@@ -190,9 +232,9 @@ if (failures.length > 0) {
   process.stdout.write(
     `${expectedVersion ? 'Release' : 'Development'} check passed for ${runtime.version}:\n` +
       `- ${runtimeName}@${runtime.version} -> public on ${npmRegistry}\n` +
+      `- ${capabilityRegistryName}@${capabilityRegistry.version} -> public on ${npmRegistry}\n` +
+      `- ${agentKitName}@${agentKit.version} -> public on ${npmRegistry}, depending on ${runtimeName}@${agentKit.dependencies?.[runtimeName]} and ${capabilityRegistryName}@${agentKit.dependencies?.[capabilityRegistryName]}\n` +
       `- ${testkitName}@${testkit.version} -> public on ${npmRegistry}, depending on ${runtimeName}@${declaredRuntime}\n` +
-      `- ${capabilityRegistryName}@${capabilityRegistry.version} -> private workspace package\n` +
-      `- ${agentKitName}@${agentKit.version} -> private workspace package, depending on ${runtimeName}@${agentKit.dependencies?.[runtimeName]} and ${capabilityRegistryName}@${agentKit.dependencies?.[capabilityRegistryName]}\n` +
-      'Publication order is runtime first, then testkit. This check publishes nothing.\n',
+      'Publication order is runtime, capability-registry, agent-kit, then testkit. This check publishes nothing.\n',
   );
 }

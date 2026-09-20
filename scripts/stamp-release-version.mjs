@@ -27,10 +27,12 @@ const paths = {
   testkit: 'packages/testkit/package.json',
   fixture: 'examples/minimal-capability/package.json',
 };
+const registryDataPath = 'packages/capability-registry/data/first-party-registry.json';
 const read = (relativePath) => JSON.parse(readFileSync(join(repositoryRoot, relativePath), 'utf8'));
 const manifests = Object.fromEntries(
   Object.entries(paths).map(([label, path]) => [label, read(path)]),
 );
+const registryData = read(registryDataPath);
 
 const failures = [];
 const expect = (condition, message) => {
@@ -82,6 +84,10 @@ expect(
   manifests.fixture.dependencies?.[runtimeName] === developmentVersion,
   `${paths.fixture}: expected ${runtimeName} dependency ${developmentVersion}`,
 );
+expect(
+  registryData.registryVersion === developmentVersion,
+  `${registryDataPath}: expected registryVersion ${developmentVersion}, found ${registryData.registryVersion}`,
+);
 
 if (failures.length > 0) {
   process.stderr.write(`Cannot stamp release metadata:\n- ${failures.join('\n- ')}\n`);
@@ -93,11 +99,18 @@ manifests.agentKit.dependencies[runtimeName] = version;
 manifests.agentKit.dependencies[capabilityRegistryName] = version;
 manifests.testkit.dependencies[runtimeName] = version;
 manifests.fixture.dependencies[runtimeName] = version;
+delete manifests.agentKit.private;
+delete manifests.capabilityRegistry.private;
+registryData.registryVersion = version;
 
 for (const [label, path] of Object.entries(paths)) {
   writeFileSync(join(repositoryRoot, path), `${JSON.stringify(manifests[label], undefined, 2)}\n`);
 }
+writeFileSync(
+  join(repositoryRoot, registryDataPath),
+  `${JSON.stringify(registryData, undefined, 2)}\n`,
+);
 
 process.stdout.write(
-  `Stamped release ${version}: root, private Capability Registry and Agent Kit, runtime, testkit, fixture, and exact local dependencies.\n`,
+  `Stamped release ${version}: root, four public package candidates, Registry data, private fixture, and exact local dependencies.\n`,
 );

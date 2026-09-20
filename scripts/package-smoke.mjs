@@ -27,17 +27,18 @@ import { extractTarball, npmCommand, packPackage } from './lib/tarball.mjs';
  * Only a package's own declared dependencies are linked in, so an undeclared import fails here
  * rather than in someone else's install.
  *
- * Testkit is installed against the **packed** runtime, never the workspace one, because that is the
- * relationship npm creates for a real consumer.
+ * Testkit is installed against the packed runtime. Agent Kit is installed against the packed
+ * runtime and Capability Registry. No Platform dependency resolves through the workspace.
  *
- * Import and type checks stay offline by linking third-party dependencies from the workspace. The
- * executable check performs a real npm install so clean consumers also prove dependency resolution
- * and npm's generated command wiring.
+ * Runtime and Testkit isolation checks link only their declared third-party dependencies from the
+ * workspace. Registry and Agent Kit additionally go through real npm installs of their complete
+ * packed dependency closures. The executable check performs a real Runtime install as well.
  */
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const workspaceModules = join(repositoryRoot, 'node_modules');
 const keepArtefacts = process.env.ATP_SMOKE_KEEP === '1';
+const developmentVersion = '0.0.0-development';
 
 const failures = [];
 const fail = (message) => failures.push(message);
@@ -113,10 +114,35 @@ const documentedExports = {
     ],
     './deployment': ['runDeploymentContractConformance'],
   },
+  '@agent-tool-platform/capability-registry': {
+    '.': [
+      'buildCapabilityRegistry',
+      'createCapabilityRegistryReader',
+      'loadFirstPartyCapabilityRegistry',
+      'capabilityEntryJsonSchema',
+      'capabilityRegistryJsonSchema',
+      'capabilityRegistrySchemaVersion',
+    ],
+  },
+  '@agent-tool-platform/agent-kit': {
+    '.': [
+      'buildAgent',
+      'buildVsCodeAgent',
+      'createAgentLock',
+      'digestAgentLock',
+      'serializeAgentLock',
+      'vscodeHostAdapter',
+    ],
+  },
 };
 
 const publishable = [
   { directory: 'packages/runtime', name: '@agent-tool-platform/runtime' },
+  {
+    directory: 'packages/capability-registry',
+    name: '@agent-tool-platform/capability-registry',
+  },
+  { directory: 'packages/agent-kit', name: '@agent-tool-platform/agent-kit' },
   { directory: 'packages/testkit', name: '@agent-tool-platform/testkit' },
 ];
 
@@ -144,6 +170,11 @@ const runtimeSchemaFiles = [
   'schemas/deployment/v1/capability-profile-declaration.schema.json',
   'schemas/deployment/v1/deployment-instance.schema.json',
 ];
+const registryDataFiles = [
+  'data/first-party-registry.json',
+  'schemas/v1/capability-entry.schema.json',
+  'schemas/v1/capability-registry.schema.json',
+];
 const forbidden = [
   [/^src\//u, 'TypeScript sources'],
   [/\.map$/u, 'source or declaration maps that would point at unpublished sources'],
@@ -159,6 +190,7 @@ const forbidden = [
 const allowedRoots = [
   /^dist\//u,
   /^bin\//u,
+  /^data\//u,
   /^schemas\//u,
   /^(package\.json|README\.md|LICENSE)$/u,
 ];
@@ -253,6 +285,66 @@ const createConsumer = (label, packed, entryPackage) => {
   return { root, modules, entryPackage };
 };
 
+/**
+ * Runs npm's installer over packed Platform artefacts in an external project. Platform packages
+ * are supplied as tarballs in one transaction so exact internal versions resolve without a
+ * registry; third-party dependencies resolve exactly as they do for a normal npm consumer.
+ */
+const createInstalledConsumer = (label, packed, entryPackage) => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), `atp-${label}-installed-`));
+  const modules = join(root, 'node_modules');
+  writeFileSync(
+    join(root, 'package.json'),
+    `${JSON.stringify({ name: `atp-${label}-consumer`, version: '0.0.0', private: true })}\n`,
+  );
+
+  try {
+    npmCommand(
+      [
+        'install',
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund',
+        '--no-package-lock',
+        '--save-exact',
+        ...Object.values(packed).map((artefact) => artefact.tarball),
+      ],
+      { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+  } catch (error) {
+    fail(
+      `${entryPackage}: npm could not install its packed dependency closure:\n${
+        error.stderr || error.stdout || error.message
+      }`,
+    );
+    return { root, modules, entryPackage, installed: false };
+  }
+
+  for (const [name, artefact] of Object.entries(packed)) {
+    const installedDir = join(modules, ...name.split('/'));
+    if (!existsSync(installedDir)) {
+      fail(`${entryPackage}: npm did not install packed dependency ${name}`);
+      continue;
+    }
+    if (lstatSync(installedDir).isSymbolicLink()) {
+      fail(`${name} was linked rather than installed from ${artefact.tarball}`);
+    }
+    const installedManifest = readManifest(join(installedDir, 'package.json'));
+    const packedManifest = readManifest(
+      join(staging, `extracted${name.replace(/[@/]/gu, '-')}`, 'package.json'),
+    );
+    if (installedManifest.version !== packedManifest.version) {
+      fail(
+        `${entryPackage}: installed ${name}@${installedManifest.version}, expected packed version ${packedManifest.version}`,
+      );
+    }
+  }
+
+  linkFromWorkspace(modules, 'typescript');
+  linkFromWorkspace(modules, '@types/node');
+  return { root, modules, entryPackage, installed: true };
+};
+
 const importConsumerSource = (consumerRoot, specifiers, expectations, packageNames) => {
   const imports = specifiers
     .map((specifier, index) => `import * as namespace${index} from '${specifier}';`)
@@ -285,7 +377,11 @@ for (const name of ${JSON.stringify(packageNames)}) {
   if (!resolved.startsWith(consumerRoot)) {
     failures.push(name + ' resolved to ' + resolved + ', outside the consumer project');
   }
-  if (/[\\\\/]packages[\\\\/](runtime|testkit)[\\\\/]src[\\\\/]/u.test(resolved)) {
+  if (
+    /[\\\\/]packages[\\\\/](runtime|testkit|capability-registry|agent-kit)[\\\\/]src[\\\\/]/u.test(
+      resolved,
+    )
+  ) {
     failures.push(name + ' resolved to a source workspace path: ' + resolved);
   }
 }
@@ -392,6 +488,114 @@ const exerciseConsumer = (consumer, packed) => {
     fail(
       `${entry}: a TypeScript consumer could not compile against the published declarations:\n${
         error.stdout || error.stderr || error.message
+      }`,
+    );
+  }
+};
+
+const exerciseRegistryAssets = (consumer) => {
+  const source = `import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import {
+  capabilityRegistrySchemaVersion,
+  createCapabilityRegistryReader,
+  loadFirstPartyCapabilityRegistry,
+} from '@agent-tool-platform/capability-registry';
+
+const registry = await loadFirstPartyCapabilityRegistry();
+const reader = createCapabilityRegistryReader(registry);
+const packageManifest = JSON.parse(
+  readFileSync(
+    fileURLToPath(import.meta.resolve('@agent-tool-platform/capability-registry/package.json')),
+    'utf8',
+  ),
+);
+if (registry.schemaVersion !== capabilityRegistrySchemaVersion) {
+  throw new Error('first-party registry schema version does not match the public API');
+}
+if (registry.registryVersion !== packageManifest.version) {
+  throw new Error('first-party registry version does not match the installed package');
+}
+if (reader.listCapabilities().length !== 7 || reader.getCapability('ast-summarizer') === undefined) {
+  throw new Error('first-party registry data did not load through the installed reader');
+}
+for (const specifier of [
+  '@agent-tool-platform/capability-registry/first-party-registry.json',
+  '@agent-tool-platform/capability-registry/schemas/v1/capability-entry.json',
+  '@agent-tool-platform/capability-registry/schemas/v1/capability-registry.json',
+]) {
+  const document = JSON.parse(readFileSync(fileURLToPath(import.meta.resolve(specifier)), 'utf8'));
+  if (typeof document !== 'object' || document === null) {
+    throw new Error(specifier + ' did not resolve to a JSON document');
+  }
+}
+console.log('ok');
+`;
+  writeFileSync(join(consumer.root, 'registry-assets.mjs'), source);
+  try {
+    execFileSync(process.execPath, [join(consumer.root, 'registry-assets.mjs')], {
+      cwd: consumer.root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    note(
+      '@agent-tool-platform/capability-registry: installed data, schemas, loader, and reader work externally',
+    );
+  } catch (error) {
+    fail(
+      `@agent-tool-platform/capability-registry: installed data/schema proof failed:\n${
+        error.stderr || error.stdout || error.message
+      }`,
+    );
+  }
+};
+
+const exerciseAgentKitBuild = (consumer) => {
+  const source = `import {
+  createCapabilityRegistryReader,
+  loadFirstPartyCapabilityRegistry,
+} from '@agent-tool-platform/capability-registry';
+import { buildVsCodeAgent } from '@agent-tool-platform/agent-kit';
+
+const registry = createCapabilityRegistryReader(await loadFirstPartyCapabilityRegistry());
+const definition = {
+  schemaVersion: 1,
+  id: 'package-smoke-agent',
+  name: 'Package Smoke Agent',
+  version: '1.0.0',
+  instructions: 'Use the selected capability and preserve evidence.',
+  capabilities: [{ id: 'ast-summarizer' }],
+};
+const first = await buildVsCodeAgent(definition, { registry });
+const second = await buildVsCodeAgent(definition, { registry });
+if (first.lockText !== second.lockText || first.lockDigest !== second.lockDigest) {
+  throw new Error('agent lock generation is not deterministic');
+}
+if (JSON.stringify(first.adapter) !== JSON.stringify(second.adapter)) {
+  throw new Error('VS Code adapter generation is not deterministic');
+}
+if (
+  !first.adapter.files.some((file) => file.path.endsWith('.agent.md')) ||
+  !first.adapter.files.some((file) => file.path === '.vscode/mcp.json')
+) {
+  throw new Error('VS Code adapter did not generate the required files');
+}
+console.log('ok');
+`;
+  writeFileSync(join(consumer.root, 'agent-build.mjs'), source);
+  try {
+    execFileSync(process.execPath, [join(consumer.root, 'agent-build.mjs')], {
+      cwd: consumer.root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    note(
+      '@agent-tool-platform/agent-kit: installed packages generate deterministic locks and adapters',
+    );
+  } catch (error) {
+    fail(
+      `@agent-tool-platform/agent-kit: installed build proof failed:\n${
+        error.stderr || error.stdout || error.message
       }`,
     );
   }
@@ -513,8 +717,21 @@ try {
       fail(`${name}: dist/ is missing; run the build before the package smoke test`);
       continue;
     }
-    if (manifest.private === true) {
-      fail(`${name}: is marked private and could never be published`);
+    const developmentPrivate =
+      name === '@agent-tool-platform/capability-registry' ||
+      name === '@agent-tool-platform/agent-kit';
+    if (
+      manifest.version === developmentVersion &&
+      developmentPrivate &&
+      manifest.private !== true
+    ) {
+      fail(`${name}: development metadata must stay private until release stamping`);
+    }
+    if (manifest.version !== developmentVersion && manifest.private !== undefined) {
+      fail(`${name}: stamped release candidate is still marked private`);
+    }
+    if (!developmentPrivate && manifest.private !== undefined) {
+      fail(`${name}: established public package unexpectedly declares private`);
     }
 
     const artefact = packPackage(packageDir, staging);
@@ -524,7 +741,9 @@ try {
     const packageRequiredFiles =
       name === '@agent-tool-platform/runtime'
         ? [...requiredFiles, ...runtimeSchemaFiles]
-        : requiredFiles;
+        : name === '@agent-tool-platform/capability-registry'
+          ? [...requiredFiles, ...registryDataFiles]
+          : requiredFiles;
     for (const required of packageRequiredFiles) {
       if (!shipped.has(required)) fail(`${name}: does not ship the required file ${required}`);
     }
@@ -549,7 +768,7 @@ try {
     for (const file of artefact.files) {
       if (!allowedRoots.some((pattern) => pattern.test(file))) {
         fail(
-          `${name}: ships ${file}, which is outside dist/, bin/, schemas/, and package documentation`,
+          `${name}: ships ${file}, which is outside dist/, bin/, data/, schemas/, and package documentation`,
         );
       }
     }
@@ -557,9 +776,21 @@ try {
     // Emitted JavaScript and declarations must never point back at sources that are not published.
     const extracted = join(staging, `extracted${name.replace(/[@/]/gu, '-')}`);
     extractTarball(artefact.tarball, extracted);
+    const packedManifest = readManifest(join(extracted, 'package.json'));
+
+    for (const [dependency, range] of Object.entries(packedManifest.dependencies ?? {})) {
+      if (!dependency.startsWith('@agent-tool-platform/')) continue;
+      if (range !== packedManifest.version) {
+        fail(
+          `${name}: packed manifest depends on ${dependency}@${range}, not exact version ${packedManifest.version}`,
+        );
+      }
+      if (packedManifest.version !== developmentVersion && range === developmentVersion) {
+        fail(`${name}: packed manifest leaks ${dependency}@${developmentVersion}`);
+      }
+    }
 
     if (name === '@agent-tool-platform/runtime') {
-      const packedManifest = readManifest(join(extracted, 'package.json'));
       for (const binary of runtimeBinaries) {
         const binTarget = packedManifest.bin?.[binary.name];
         if (binTarget !== binary.target) {
@@ -615,9 +846,49 @@ try {
     consumers.push(runtimeConsumer);
     exerciseConsumer(runtimeConsumer, runtimeOnly);
 
-    const testkitConsumer = createConsumer('testkit', packed, '@agent-tool-platform/testkit');
+    const testkitClosure = {
+      '@agent-tool-platform/runtime': packed['@agent-tool-platform/runtime'],
+      '@agent-tool-platform/testkit': packed['@agent-tool-platform/testkit'],
+    };
+    const testkitConsumer = createConsumer(
+      'testkit',
+      testkitClosure,
+      '@agent-tool-platform/testkit',
+    );
     consumers.push(testkitConsumer);
-    exerciseConsumer(testkitConsumer, packed);
+    exerciseConsumer(testkitConsumer, testkitClosure);
+
+    const registryClosure = {
+      '@agent-tool-platform/capability-registry':
+        packed['@agent-tool-platform/capability-registry'],
+    };
+    const registryConsumer = createInstalledConsumer(
+      'capability-registry',
+      registryClosure,
+      '@agent-tool-platform/capability-registry',
+    );
+    consumers.push(registryConsumer);
+    if (registryConsumer.installed) {
+      exerciseConsumer(registryConsumer, registryClosure);
+      exerciseRegistryAssets(registryConsumer);
+    }
+
+    const agentKitClosure = {
+      '@agent-tool-platform/runtime': packed['@agent-tool-platform/runtime'],
+      '@agent-tool-platform/capability-registry':
+        packed['@agent-tool-platform/capability-registry'],
+      '@agent-tool-platform/agent-kit': packed['@agent-tool-platform/agent-kit'],
+    };
+    const agentKitConsumer = createInstalledConsumer(
+      'agent-kit',
+      agentKitClosure,
+      '@agent-tool-platform/agent-kit',
+    );
+    consumers.push(agentKitConsumer);
+    if (agentKitConsumer.installed) {
+      exerciseConsumer(agentKitConsumer, agentKitClosure);
+      exerciseAgentKitBuild(agentKitConsumer);
+    }
 
     // The dependency may only point one way.
     const runtimeManifest = readManifest(
@@ -645,6 +916,6 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    'Publication smoke test passed: both tarballs ship only intended files, deployment schemas and commands work from the packed runtime, every documented export loads, and declarations type-check for an external TypeScript consumer.\n',
+    'Publication smoke test passed: all four tarballs ship only intended files, external npm installs resolve exact Platform dependencies, Registry data and schemas load, Agent Kit builds deterministically, Runtime commands work, and public declarations type-check.\n',
   );
 }

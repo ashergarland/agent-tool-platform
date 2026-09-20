@@ -20,7 +20,7 @@ import { dirname, join, resolve } from 'node:path';
  * without a shell on Windows, and avoids a shell interpreting any argument. When the script is run
  * directly rather than through `npm run`, npm's CLI is located next to the Node binary instead.
  */
-const npmCliPath = () => {
+export const npmCliPath = () => {
   const fromScript = process.env.npm_execpath;
   if (fromScript && fromScript.endsWith('.js')) return fromScript;
   const nodeDir = dirname(process.execPath);

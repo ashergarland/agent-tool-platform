@@ -1,7 +1,7 @@
 name: Publish
 
-# This exact filename is configured as the npm Trusted Publisher for both packages. Renaming it
-# breaks publishing until the npm-side configuration is updated to match.
+# This exact filename is the npm Trusted Publisher identity for established packages and the
+# required post-bootstrap identity for the new packages. Renaming it breaks npm-side configuration.
 on:
   push:
     tags:
@@ -13,12 +13,12 @@ on:
         required: true
         type: string
       dry_run:
-        description: 'Run validation and npm publish --dry-run without publishing'
+        description: 'Run every validation and npm publish --dry-run without publishing'
         required: false
         default: true
         type: boolean
-      recover_testkit_only:
-        description: 'Recover a partial release where runtime exists and testkit does not'
+      recover:
+        description: 'Resume a verified partial release from its first missing package'
         required: false
         default: false
         type: boolean
@@ -34,7 +34,7 @@ concurrency:
 jobs:
   publish:
     name: Validate and publish
-    # GitHub-hosted runners only: npm trusted publishing does not accept self-hosted runners.
+    # npm Trusted Publishing accepts GitHub-hosted runners only.
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -57,7 +57,7 @@ jobs:
           DISPATCH_VERSION: ${{ inputs.version }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
           EVENT_NAME: ${{ github.event_name }}
-          RECOVER_TESTKIT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.recover_testkit_only || false }}
+          RECOVER: ${{ github.event_name == 'workflow_dispatch' && inputs.recover || false }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -86,12 +86,16 @@ jobs:
               echo "::error::Requested version must be an exact package version; received $requested."
               exit 1
             fi
-            if [ "$DRY_RUN" != "true" ] && [ "$RECOVER_TESTKIT_ONLY" != "true" ]; then
-              echo "::error::workflow_dispatch may only perform a dry run or explicit testkit-only recovery. Normal releases require a pushed tag."
+            if [ "$DRY_RUN" = "true" ] && [ "$RECOVER" = "true" ]; then
+              echo "::error::Choose either a dry run or recovery, not both."
+              exit 1
+            fi
+            if [ "$DRY_RUN" != "true" ] && [ "$RECOVER" != "true" ]; then
+              echo "::error::workflow_dispatch may only perform a dry run or explicit recovery. Normal releases require a pushed tag."
               exit 1
             fi
             release_tag="v$requested"
-            if [ "$RECOVER_TESTKIT_ONLY" = "true" ]; then
+            if [ "$RECOVER" = "true" ]; then
               git fetch --force --no-tags origin "refs/tags/$release_tag:refs/tags/$release_tag"
               git fetch --no-tags origin "$DEFAULT_BRANCH"
               release_commit="$(git rev-parse "${release_tag}^{commit}")"
@@ -102,6 +106,7 @@ jobs:
               git checkout --detach "$release_commit"
               source="recovery for tag $release_tag"
             else
+              release_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
               source="dry run on $REF_NAME"
             fi
           else
@@ -110,20 +115,15 @@ jobs:
           fi
 
           echo "version=$requested" >> "$GITHUB_OUTPUT"
+          echo "commit=$release_commit" >> "$GITHUB_OUTPUT"
           echo "source=$source" >> "$GITHUB_OUTPUT"
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
-          echo "Validated $source for version $requested."
+          echo "Validated $source for version $requested at $release_commit."
 
       - name: Install a pinned npm that supports trusted publishing
         env:
-          # Pinned deliberately. `npm@latest` would make every release depend on whatever npm
-          # published that morning, including a major version bump, which is the opposite of what a
-          # release job should be: `latest` is already npm 12. This pin is bounded to the npm 11
-          # line and is raised in a commit, reviewed like any other change, never silently.
+          # The exact npm release is reviewed here rather than changing underneath a release.
           NPM_VERSION: '11.19.0'
-          # OIDC trusted publishing was added in npm 11.5.1. The pin above is well past it, but the
-          # floor is still asserted below so that lowering the pin fails loudly rather than
-          # producing an ENEEDAUTH at the publish step.
           NPM_TRUSTED_PUBLISHING_MINIMUM: '11.5.1'
         run: |
           set -euo pipefail
@@ -174,119 +174,106 @@ jobs:
       - name: Validate repository metadata
         run: npm run metadata:validate
 
-      - name: Inspect registry state
+      - name: Inspect and classify registry state
         id: registry
         env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
           EVENT_NAME: ${{ github.event_name }}
-          RECOVER_TESTKIT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.recover_testkit_only || false }}
+          RECOVER: ${{ github.event_name == 'workflow_dispatch' && inputs.recover || false }}
+          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
 
-          package_exists() {
-            local name="$1" output status resolved
-            set +e
-            output="$(npm view "$name@$VERSION" version --json 2>&1)"
-            status=$?
-            set -e
-            if [ "$status" -eq 0 ]; then
-              resolved="$(printf '%s' "$output" | node -e "let input=''; process.stdin.on('data', chunk => input += chunk).on('end', () => process.stdout.write(String(JSON.parse(input))))")"
-              if [ "$resolved" != "$VERSION" ]; then
-                echo "::error::Registry returned unexpected version $resolved for $name@$VERSION." >&2
-                exit 1
-              fi
-              printf 'true'
-              return
-            fi
-            if printf '%s' "$output" | grep -q 'E404'; then
-              printf 'false'
-              return
-            fi
-            echo "::error::Could not query $name@$VERSION: $output" >&2
-            exit 1
-          }
+          metadata="$(node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT")"
+          printf '%s\n' "$metadata" >> "$GITHUB_OUTPUT"
+          state="$(printf '%s\n' "$metadata" | sed -n 's/^state=//p')"
 
-          runtime_exists="$(package_exists '@agent-tool-platform/runtime')"
-          testkit_exists="$(package_exists '@agent-tool-platform/testkit')"
-          echo "runtime_exists=$runtime_exists" >> "$GITHUB_OUTPUT"
-          echo "testkit_exists=$testkit_exists" >> "$GITHUB_OUTPUT"
-
-          if [ "$runtime_exists" = "false" ] && [ "$testkit_exists" = "false" ]; then
-            if [ "$RECOVER_TESTKIT_ONLY" = "true" ]; then
-              echo "::error::Testkit-only recovery requires the runtime to exist already."
+          if [ "$DRY_RUN" = "true" ]; then
+            mode="dry-run"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            if [ "$state" = "absent" ]; then
+              mode="normal"
+            elif [ "$state" = "complete" ]; then
+              echo "::error::Version $VERSION is already released; npm versions are immutable."
               exit 1
-            fi
-            mode="normal"
-          elif [ "$runtime_exists" = "true" ] && [ "$testkit_exists" = "true" ]; then
-            echo "::error::Version $VERSION is already released; npm versions are immutable."
-            exit 1
-          elif [ "$runtime_exists" = "true" ] && [ "$testkit_exists" = "false" ]; then
-            if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$RECOVER_TESTKIT_ONLY" = "true" ]; then
-              mode="recover-testkit"
             else
-              echo "::error::Partial release detected: runtime@$VERSION exists and testkit@$VERSION does not. Use deliberate workflow_dispatch testkit-only recovery."
+              echo "::error::Partial release detected for $VERSION. Use deliberate workflow_dispatch recovery."
               exit 1
             fi
+          elif [ "$RECOVER" = "true" ]; then
+            if [ "$state" = "absent" ]; then
+              echo "::error::Recovery requires a non-empty verified publication prefix. Use the release tag for a new release."
+              exit 1
+            fi
+            mode="recovery"
           else
-            echo "::error::Broken release state: testkit@$VERSION exists but runtime@$VERSION does not."
+            echo "::error::Invalid release mode."
             exit 1
           fi
 
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "Registry state selected $mode mode for $VERSION."
 
-      - name: Publish the runtime
+      - name: Publish Runtime
         id: publish-runtime
-        if: ${{ (github.event_name != 'workflow_dispatch' || !inputs.dry_run) && steps.registry.outputs.mode == 'normal' }}
+        if: ${{ steps.registry.outputs.mode != 'dry-run' && steps.registry.outputs.runtime_exists != 'true' }}
         run: npm publish --workspace @agent-tool-platform/runtime --access public
 
-      - name: Wait for the exact runtime version
-        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.dry_run }}
+      - name: Wait for the exact Runtime version
+        if: ${{ steps.registry.outputs.mode != 'dry-run' }}
         env:
+          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          set -euo pipefail
-          for attempt in $(seq 1 18); do
-            output="$(npm view "@agent-tool-platform/runtime@$VERSION" version --json 2>/dev/null || true)"
-            resolved="$(printf '%s' "$output" | node -e "let input=''; process.stdin.on('data', chunk => input += chunk).on('end', () => { try { process.stdout.write(String(JSON.parse(input))) } catch {} })")"
-            if [ "$resolved" = "$VERSION" ]; then
-              echo "@agent-tool-platform/runtime@$VERSION is publicly resolvable."
-              exit 0
-            fi
-            echo "Waiting for runtime@$VERSION registry propagation (attempt $attempt of 18)."
-            sleep 10
-          done
-          echo "::error::runtime@$VERSION was not publicly resolvable after 3 minutes; testkit will not be published."
-          exit 1
+          node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT" \
+            --minimum-prefix 1 --attempts 18 --delay-ms 10000
 
-      - name: Publish the testkit
+      - name: Publish Capability Registry
+        id: publish-capability-registry
+        if: ${{ steps.registry.outputs.mode != 'dry-run' && steps.registry.outputs.capability_registry_exists != 'true' }}
+        run: npm publish --workspace @agent-tool-platform/capability-registry --access public
+
+      - name: Wait for the exact Capability Registry version
+        if: ${{ steps.registry.outputs.mode != 'dry-run' }}
+        env:
+          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT" \
+            --minimum-prefix 2 --attempts 18 --delay-ms 10000
+
+      - name: Publish Agent Kit
+        id: publish-agent-kit
+        if: ${{ steps.registry.outputs.mode != 'dry-run' && steps.registry.outputs.agent_kit_exists != 'true' }}
+        run: npm publish --workspace @agent-tool-platform/agent-kit --access public
+
+      - name: Wait for the exact Agent Kit version
+        if: ${{ steps.registry.outputs.mode != 'dry-run' }}
+        env:
+          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT" \
+            --minimum-prefix 3 --attempts 18 --delay-ms 10000
+
+      - name: Publish Testkit
         id: publish-testkit
-        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.dry_run }}
+        if: ${{ steps.registry.outputs.mode != 'dry-run' && steps.registry.outputs.testkit_exists != 'true' }}
         run: npm publish --workspace @agent-tool-platform/testkit --access public
 
-      - name: Verify the published testkit
-        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.dry_run }}
+      - name: Verify the complete release from npm
+        id: verify
+        if: ${{ steps.registry.outputs.mode != 'dry-run' }}
         env:
+          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          set -euo pipefail
-          for attempt in $(seq 1 18); do
-            published_version="$(npm view "@agent-tool-platform/testkit@$VERSION" version --json 2>/dev/null || true)"
-            dependencies="$(npm view "@agent-tool-platform/testkit@$VERSION" dependencies --json 2>/dev/null || true)"
-            resolved="$(printf '%s' "$published_version" | node -e "let input=''; process.stdin.on('data', chunk => input += chunk).on('end', () => { try { process.stdout.write(String(JSON.parse(input))) } catch {} })")"
-            runtime_dependency="$(printf '%s' "$dependencies" | node -e "let input=''; process.stdin.on('data', chunk => input += chunk).on('end', () => { try { process.stdout.write(JSON.parse(input)['@agent-tool-platform/runtime'] ?? '') } catch {} })")"
-            if [ "$resolved" = "$VERSION" ] && [ "$runtime_dependency" = "$VERSION" ]; then
-              echo "@agent-tool-platform/testkit@$VERSION is publicly resolvable and depends exactly on runtime@$VERSION."
-              exit 0
-            fi
-            echo "Waiting for testkit@$VERSION registry propagation (attempt $attempt of 18)."
-            sleep 10
-          done
-          echo "::error::testkit@$VERSION and its exact runtime dependency were not publicly resolvable after 3 minutes."
-          exit 1
+          node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT" \
+            --minimum-prefix 4 --attempts 18 --delay-ms 10000
 
       - name: Create the GitHub Release
-        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.dry_run }}
+        if: ${{ steps.registry.outputs.mode != 'dry-run' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
@@ -299,42 +286,42 @@ jobs:
           fi
 
       - name: Dry run publication
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
-        env:
-          MODE: ${{ steps.registry.outputs.mode }}
+        if: ${{ steps.registry.outputs.mode == 'dry-run' }}
         run: |
           set -euo pipefail
-          if [ "$MODE" = "normal" ]; then
-            npm publish --workspace @agent-tool-platform/runtime --access public --dry-run
-          fi
+          npm publish --workspace @agent-tool-platform/runtime --access public --dry-run
+          npm publish --workspace @agent-tool-platform/capability-registry --access public --dry-run
+          npm publish --workspace @agent-tool-platform/agent-kit --access public --dry-run
           npm publish --workspace @agent-tool-platform/testkit --access public --dry-run
           echo "Dry run only. Nothing was published."
 
       - name: Report a partial release
-        if: ${{ failure() && (steps.registry.outputs.runtime_exists == 'true' || steps.publish-runtime.outcome == 'success') && steps.registry.outputs.testkit_exists != 'true' }}
+        if: ${{ failure() && steps.registry.outcome == 'success' && steps.registry.outputs.mode != 'dry-run' }}
         env:
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           {
             echo "## Partial release"
             echo ""
-            echo "Runtime $VERSION is published, but this run did not verify testkit $VERSION."
-            echo "Use **workflow_dispatch** from the default branch with version \`$VERSION\` and"
-            echo "**recover_testkit_only** enabled. Do not republish or independently bump runtime."
+            echo "Publication or verification stopped before all four packages at $VERSION were proven."
+            echo "Re-run **workflow_dispatch** from the default branch with version \`$VERSION\`,"
+            echo "**dry_run** disabled, and **recover** enabled. Recovery checks out \`$RELEASE_TAG\`,"
+            echo "re-verifies the immutable prefix, and publishes only the missing suffix."
+            echo "Do not republish, force publish, or independently bump any package."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Summarise the release
         if: ${{ success() }}
         env:
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
           MODE: ${{ steps.registry.outputs.mode }}
           SOURCE: ${{ steps.version.outputs.source }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           {
-            if [ "$DRY_RUN" = "true" ]; then
+            if [ "$MODE" = "dry-run" ]; then
               echo "## Publication dry run completed"
-            elif [ "$MODE" = "recover-testkit" ]; then
+            elif [ "$MODE" = "recovery" ]; then
               echo "## Partial release recovered"
             else
               echo "## Release published"
@@ -342,15 +329,9 @@ jobs:
             echo ""
             echo "- Source: $SOURCE"
             echo "- Version: \`$VERSION\`"
-            echo "- Mode: \`$MODE\`"
-            if [ "$MODE" = "normal" ]; then
-              echo "- Runtime: \`@agent-tool-platform/runtime@$VERSION\`"
-            else
-              echo "- Runtime: already published and verified"
-            fi
-            echo "- Testkit: \`@agent-tool-platform/testkit@$VERSION\`"
+            echo "- Publish order: Runtime, Capability Registry, Agent Kit, Testkit"
             echo "- Authentication: npm Trusted Publishing (OIDC)"
-            if [ "$DRY_RUN" != "true" ]; then
+            if [ "$MODE" != "dry-run" ]; then
               echo "- GitHub Release: created or already present with generated notes"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

@@ -62,6 +62,13 @@ const root = readManifest('package.json');
 describe('publishable package metadata', () => {
   const publishable: readonly (readonly [string, PackageManifest, string, string])[] = [
     ['runtime', runtime, runtimeName, 'packages/runtime'],
+    [
+      'capability registry',
+      capabilityRegistry,
+      capabilityRegistryName,
+      'packages/capability-registry',
+    ],
+    ['agent kit', agentKit, agentKitName, 'packages/agent-kit'],
     ['testkit', testkit, testkitName, 'packages/testkit'],
   ];
 
@@ -69,7 +76,12 @@ describe('publishable package metadata', () => {
     '%s is a public, truthful npm package',
     (_label, manifest, name, directory) => {
       expect(manifest.name).toBe(name);
-      expect(manifest.private).toBeUndefined();
+      expect(manifest.private).toBe(
+        expectedVersion === developmentVersion &&
+          (name === capabilityRegistryName || name === agentKitName)
+          ? true
+          : undefined,
+      );
       expect(manifest.version).toBe(expectedVersion);
       expect(manifest.license).toBe('MIT');
       expect(manifest.publishConfig).toEqual({
@@ -101,14 +113,17 @@ describe('publishable package metadata', () => {
     },
   );
 
-  it('versions the two packages in lockstep with the repository', () => {
-    expect(testkit.version).toBe(runtime.version);
+  it('versions all four packages in lockstep with the repository', () => {
+    expect(
+      new Set([runtime.version, testkit.version, capabilityRegistry.version, agentKit.version]),
+    ).toEqual(new Set([runtime.version]));
     expect(root.version).toBe(runtime.version);
   });
 
-  it('depends on the exact runtime version rather than a range or a local protocol', () => {
+  it('uses exact internal package versions rather than ranges or local protocols', () => {
     expect(testkit.dependencies?.[runtimeName]).toBe(runtime.version);
     expect(agentKit.dependencies?.[runtimeName]).toBe(runtime.version);
+    expect(agentKit.dependencies?.[capabilityRegistryName]).toBe(capabilityRegistry.version);
   });
 
   it.each(publishable)('%s declares only registry-resolvable dependencies', (_l, manifest) => {
@@ -129,18 +144,20 @@ describe('publishable package metadata', () => {
     expect(capabilityRegistry.devDependencies?.[agentKitName]).toBeUndefined();
   });
 
-  it('keeps the repository root, composition packages, and example fixture unpublishable', () => {
+  it('keeps non-products private and gates new packages until release stamping', () => {
     expect(root.private).toBe(true);
-    expect(agentKit.private).toBe(true);
     expect(agentKit.name).toBe(agentKitName);
     expect(agentKit.version).toBe(runtime.version);
-    expect(capabilityRegistry.private).toBe(true);
+    expect(agentKit.private).toBe(expectedVersion === developmentVersion ? true : undefined);
     expect(capabilityRegistry.name).toBe(capabilityRegistryName);
     expect(capabilityRegistry.version).toBe(runtime.version);
+    expect(capabilityRegistry.private).toBe(
+      expectedVersion === developmentVersion ? true : undefined,
+    );
     expect(readManifest('examples/minimal-capability/package.json').private).toBe(true);
   });
 
-  it('ships deployment schemas, runtime commands, and matched package subpaths', () => {
+  it('ships deployment and registry schemas, runtime commands, and matched package subpaths', () => {
     expect(runtime.files).toContain('bin');
     expect(runtime.files).toContain('schemas');
     expect(runtime.bin).toEqual({
@@ -160,6 +177,15 @@ describe('publishable package metadata', () => {
     expect(testkit.exports?.['./deployment']).toEqual({
       types: './dist/deployment/index.d.ts',
       import: './dist/deployment/index.js',
+    });
+    expect(capabilityRegistry.files).toContain('data');
+    expect(capabilityRegistry.files).toContain('schemas');
+    expect(capabilityRegistry.exports?.['./first-party-registry.json']).toBe(
+      './data/first-party-registry.json',
+    );
+    expect(agentKit.exports?.['.']).toEqual({
+      types: './dist/index.d.ts',
+      import: './dist/index.js',
     });
   });
 
@@ -324,73 +350,81 @@ describe('release workflow', () => {
     }
   });
 
-  it('publishes the runtime before the testkit, each targeting its own workspace', () => {
-    const runtimeAt = indexOfStep(
-      (step) => runsPublish(step) && (step.run ?? '').includes(runtimeName),
+  it('publishes every workspace in a fixed dependency-safe order', () => {
+    const publishIndexes = [runtimeName, capabilityRegistryName, agentKitName, testkitName].map(
+      (name) => indexOfStep((step) => runsPublish(step) && (step.run ?? '').includes(name)),
     );
-    const testkitAt = indexOfStep(
-      (step) => runsPublish(step) && (step.run ?? '').includes(testkitName),
-    );
-    expect(runtimeAt).toBeGreaterThanOrEqual(0);
-    expect(testkitAt).toBeGreaterThan(runtimeAt);
-    expect(steps[runtimeAt]?.run).toContain('--workspace @agent-tool-platform/runtime');
-    expect(steps[testkitAt]?.run).toContain('--workspace @agent-tool-platform/testkit');
+    expect(publishIndexes[0]).toBeGreaterThanOrEqual(0);
+    expect(publishIndexes).toEqual([...publishIndexes].sort((left, right) => left - right));
+    for (const [index, name] of [
+      runtimeName,
+      capabilityRegistryName,
+      agentKitName,
+      testkitName,
+    ].entries()) {
+      expect(steps[publishIndexes[index] ?? -1]?.run).toContain(`--workspace ${name}`);
+    }
   });
 
-  it('handles absent, complete, partial, and inverted registry states explicitly', () => {
+  it('handles absent, complete, partial, and out-of-order registry states explicitly', () => {
     const guard = steps.find((step) => step.id === 'registry');
+    expect(guard?.run).toContain('scripts/release-registry-state.mjs');
     expect(guard?.run).toContain('mode="normal"');
     expect(guard?.run).toContain('already released; npm versions are immutable');
-    expect(guard?.run).toContain('mode="recover-testkit"');
+    expect(guard?.run).toContain('mode="recovery"');
     expect(guard?.run).toContain('Partial release detected');
-    expect(guard?.run).toContain('Broken release state');
-    expect(guard?.run).toContain('RECOVER_TESTKIT_ONLY');
+    expect(read('scripts/release-registry-state.mjs')).toContain('Unsafe release state');
+    expect(guard?.run).toContain('RECOVER');
     expect(workflowSource).not.toMatch(/npm publish[^\n]*--force/u);
   });
 
-  it('waits for registry propagation and verifies the published dependency', () => {
-    const runtimeWait = indexOfStep((step) =>
-      (step.run ?? '').includes('runtime@$VERSION registry propagation'),
-    );
-    const testkitPublish = indexOfStep(
-      (step) => runsPublish(step) && (step.run ?? '').includes(testkitName),
-    );
-    const testkitVerify = indexOfStep((step) => (step.run ?? '').includes('runtime_dependency'));
-    expect(runtimeWait).toBeGreaterThan(
-      indexOfStep((step) => runsPublish(step) && (step.run ?? '').includes(runtimeName)),
-    );
-    expect(testkitPublish).toBeGreaterThan(runtimeWait);
-    expect(testkitVerify).toBeGreaterThan(testkitPublish);
-    expect(steps[runtimeWait]?.run).toContain('seq 1 18');
-    expect(steps[testkitVerify]?.run).toContain("['@agent-tool-platform/runtime']");
+  it('waits for each exact dependency prefix and verifies the complete release', () => {
+    const waits = steps.filter((step) => (step.run ?? '').includes('--minimum-prefix'));
+    expect(waits.some((step) => (step.run ?? '').includes('--minimum-prefix 1'))).toBe(true);
+    expect(waits.some((step) => (step.run ?? '').includes('--minimum-prefix 2'))).toBe(true);
+    expect(waits.some((step) => (step.run ?? '').includes('--minimum-prefix 3'))).toBe(true);
+    const verify = steps.find((step) => step.id === 'verify');
+    expect(verify?.run).toContain('--minimum-prefix 4');
+    for (const wait of [...waits, verify]) {
+      expect(wait?.run).toContain('--attempts 18');
+      expect(wait?.run).toContain('--delay-ms 10000');
+    }
   });
 
   it('reports partial releases with the deliberate recovery path', () => {
-    const report = steps.find((step) => (step.run ?? '').includes('PARTIAL RELEASE'));
-    const fallbackReport =
-      report ?? steps.find((step) => (step.run ?? '').includes('recover_testkit_only'));
-    expect(fallbackReport?.if).toContain('failure()');
-    expect(fallbackReport?.run).toContain('workflow_dispatch');
-    expect(fallbackReport?.run).toContain('recover_testkit_only');
-    expect(fallbackReport?.run).toContain('Do not republish');
+    const report = steps.find((step) => step.name === 'Report a partial release');
+    expect(report?.if).toContain('failure()');
+    expect(report?.run).toContain('workflow_dispatch');
+    expect(report?.run).toContain('recover');
+    expect(report?.run).toContain('missing suffix');
+    expect(report?.run).toContain('Do not republish');
   });
 
-  it('limits manual dispatch to dry runs or explicit testkit recovery', () => {
+  it('limits manual dispatch to dry runs or explicit state-machine recovery', () => {
     const dispatch = (workflow.on?.workflow_dispatch as WorkflowDispatchTrigger)?.inputs;
     expect(dispatch?.dry_run?.default).toBe(true);
-    expect(dispatch?.recover_testkit_only?.default).toBe(false);
+    expect(dispatch?.recover?.default).toBe(false);
+    expect(Object.keys(dispatch ?? {})).toEqual(['version', 'dry_run', 'recover']);
     const guard = steps.find((step) => step.id === 'version');
     expect(guard?.run).toContain('workflow_dispatch may only perform a dry run');
     expect(guard?.run).toContain('git checkout --detach "$release_commit"');
   });
 
   it('creates generated-notes GitHub Releases only after public npm verification', () => {
-    const verifyAt = indexOfStep((step) => (step.run ?? '').includes('runtime_dependency'));
+    const verifyAt = indexOfStep((step) => step.id === 'verify');
     const releaseAt = indexOfStep((step) => (step.run ?? '').includes('gh release create'));
     expect(releaseAt).toBeGreaterThan(verifyAt);
     expect(steps[releaseAt]?.run).toContain('--generate-notes');
     expect(steps[releaseAt]?.run).toContain('gh release view');
-    expect(steps[releaseAt]?.if).toContain("github.event_name != 'workflow_dispatch'");
+    expect(steps[releaseAt]?.if).toContain("steps.registry.outputs.mode != 'dry-run'");
+  });
+
+  it('dry-runs all four package candidates without registry mutation', () => {
+    const dryRun = steps.find((step) => step.name === 'Dry run publication');
+    for (const name of [runtimeName, capabilityRegistryName, agentKitName, testkitName]) {
+      expect(dryRun?.run).toContain(`--workspace ${name}`);
+    }
+    expect(dryRun?.run?.match(/--dry-run/gu)).toHaveLength(4);
   });
 });
 
@@ -423,74 +457,79 @@ describe('release documentation', () => {
     }
     expect(releasing).toContain('0.0.0-development');
     expect(releasing).toMatch(/No `package\.json` edits\. No lockfile edits/iu);
-    expect(releasing).toContain('generated notes');
+    expect(releasing).toMatch(/generated[- ]notes/iu);
   });
 
-  it('documents the one-time manual bootstrap in the only safe order', () => {
-    const runtimeAt = releasing.indexOf(
-      'npm publish --workspace @agent-tool-platform/runtime --access public',
+  it('documents the dependency-safe normal order and generic recovery model', () => {
+    const normal = releasing.slice(releasing.indexOf('## A.'), releasing.indexOf('## B.'));
+    const order = ['Runtime;', 'Capability Registry;', 'Agent Kit;', 'Testkit;'].map((value) =>
+      normal.indexOf(value),
     );
-    const testkitAt = releasing.indexOf(
-      'npm publish --workspace @agent-tool-platform/testkit --access public',
-    );
-    expect(runtimeAt).toBeGreaterThan(0);
-    expect(testkitAt).toBeGreaterThan(runtimeAt);
-    expect(releasing).toContain('npm whoami');
-    expect(releasing).toMatch(/Do not publish the testkit first/iu);
+    expect(order[0]).toBeGreaterThan(0);
+    expect(order).toEqual([...order].sort((left, right) => left - right));
+    expect(normal).toContain('valid prefix');
+    expect(normal).toContain('missing suffix');
+    expect(normal).toContain('wrong source commit');
+    expect(normal).toContain('recover');
   });
 
-  it('describes publishing the testkit first as temporary breakage, not a lost version', () => {
-    // Publishing out of order leaves the testkit unresolvable only until the runtime version it
-    // depends on is published; it does not permanently burn the version. Overstating that would
-    // push a maintainer into an unnecessary bump, which is exactly what the lockstep rule forbids.
-    expect(releasing).toMatch(/temporarily uninstallable/iu);
-    expect(releasing).toMatch(/until .*runtime@0\.1\.0.*is itself published/su);
-    expect(releasing).not.toMatch(/the only fix is another version/iu);
-  });
-
-  it('records the completed bootstrap while preserving it as one-time history', () => {
+  it('preserves the completed Runtime/Testkit bootstrap as history', () => {
     expect(releasing).toContain('August 2026');
     expect(releasing).toMatch(/Bootstrap complete/iu);
     expect(releasing).toMatch(/historical documentation/iu);
     expect(releasing).toMatch(/must not be repeated/iu);
-    expect(releasing).toContain('Completed repository transition');
+    expect(releasing).toMatch(/temporarily uninstallable/iu);
+    expect(releasing).toContain('@agent-tool-platform/runtime@0.1.0');
   });
 
-  it('documents the npm-side Trusted Publisher configuration', () => {
+  it('documents the pending new-package bootstrap and source proof', () => {
+    const bootstrap = releasing.slice(releasing.indexOf('## C.'));
+    expect(bootstrap).toContain('Not completed');
+    expect(bootstrap).toContain('Use **0.2.0**');
+    const registryAt = bootstrap.indexOf(
+      'npm publish --workspace @agent-tool-platform/capability-registry --access public',
+    );
+    const agentKitAt = bootstrap.indexOf(
+      'npm publish --workspace @agent-tool-platform/agent-kit --access public',
+    );
+    expect(registryAt).toBeGreaterThan(0);
+    expect(agentKitAt).toBeGreaterThan(registryAt);
+    expect(bootstrap).toContain('npm whoami');
+    expect(bootstrap).toContain('gitHead');
+    expect(bootstrap).toContain('dist.integrity');
+    expect(bootstrap).toContain('publish only Testkit');
+  });
+
+  it('documents the npm-side Trusted Publisher configuration for all packages', () => {
     for (const value of [
       'GitHub Actions',
       'ashergarland',
       'agent-tool-platform',
       'publish.yml',
       'npm publish',
-      'once per package',
+      '@agent-tool-platform/capability-registry',
+      '@agent-tool-platform/agent-kit',
     ]) {
       expect(releasing).toContain(value);
     }
-    expect(releasing).toMatch(/two-factor authentication and disallow tokens/iu);
+    expect(releasing).toMatch(/two-factor authentication.*disallow tokens/isu);
   });
 
-  it('states that 0.1.0 is public and contains no stale unpublished claim', () => {
-    const documents = [
-      releasing,
-      readme,
-      read('packages/runtime/README.md'),
-      read('packages/testkit/README.md'),
-    ];
-    expect(releasing).toMatch(/0\.1\.0 were published in August 2026/iu);
-    expect(readme).toMatch(/0\.1\.0 are publicly available from npm/iu);
-    for (const document of documents) {
-      expect(document).not.toMatch(
-        /packages? (?:has|have) not been published|not (?:yet )?published on npm/iu,
-      );
-    }
-    expect(read('scripts/validate-metadata.ts')).not.toContain('PRE-PUBLICATION ONLY');
+  it('states the current public and pending package status truthfully', () => {
+    expect(releasing).toMatch(/Runtime and Testkit 0\.1\.3 are currently public/iu);
+    expect(releasing).toMatch(/Capability Registry and Agent Kit are not yet public/isu);
+    expect(readme).toMatch(/Runtime and Testkit 0\.1\.3 are publicly available from npm/iu);
+    expect(readme).toMatch(/have not completed.*one-time public-package.*bootstrap/su);
   });
 
-  it('documents the consumer installation for both packages', () => {
+  it('documents all consumers and forbids local M5.5 package wiring', () => {
     expect(readme).toContain('npm install @agent-tool-platform/runtime');
     expect(readme).toContain('npm install -D @agent-tool-platform/testkit');
+    expect(readme).toContain('npm install @agent-tool-platform/capability-registry');
+    expect(readme).toContain('npm install @agent-tool-platform/agent-kit');
     expect(readme).toContain('lockstep');
+    expect(releasing).toContain('agent-composition-template');
+    expect(releasing).toMatch(/must not use `file:` paths/iu);
   });
 
   it('embeds no credential', () => {
@@ -500,6 +539,6 @@ describe('release documentation', () => {
     expect(releasing).not.toMatch(/(NPM_TOKEN|NODE_AUTH_TOKEN)\s*[:=]\s*[^\s`]+/u);
     expect(releasing).not.toMatch(/_authToken\s*=/u);
     expect(releasing).not.toMatch(/secrets\.NPM/u);
-    expect(releasing).toMatch(/no long-lived npm\s+write token/iu);
+    expect(releasing).toMatch(/no .*long-lived npm write credential/isu);
   });
 });
