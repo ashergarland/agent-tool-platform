@@ -185,7 +185,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          metadata="$(node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT")"
+          metadata="$(node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT" \
+            --verification exact-artifact)"
           printf '%s\n' "$metadata" >> "$GITHUB_OUTPUT"
           state="$(printf '%s\n' "$metadata" | sed -n 's/^state=//p')"
 
@@ -227,7 +228,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT" \
-            --minimum-prefix 1 --attempts 18 --delay-ms 10000
+            --verification exact-artifact --minimum-prefix 1 --attempts 18 --delay-ms 10000
 
       - name: Publish Capability Registry
         id: publish-capability-registry
@@ -241,7 +242,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT" \
-            --minimum-prefix 2 --attempts 18 --delay-ms 10000
+            --verification exact-artifact --minimum-prefix 2 --attempts 18 --delay-ms 10000
 
       - name: Publish Agent Kit
         id: publish-agent-kit
@@ -255,7 +256,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT" \
-            --minimum-prefix 3 --attempts 18 --delay-ms 10000
+            --verification exact-artifact --minimum-prefix 3 --attempts 18 --delay-ms 10000
 
       - name: Publish Testkit
         id: publish-testkit
@@ -270,7 +271,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT" \
-            --minimum-prefix 4 --attempts 18 --delay-ms 10000
+            --verification exact-artifact --minimum-prefix 4 --attempts 18 --delay-ms 10000
 
       - name: Create the GitHub Release
         if: ${{ steps.registry.outputs.mode != 'dry-run' }}
@@ -295,20 +296,52 @@ jobs:
           npm publish --workspace @agent-tool-platform/testkit --access public --dry-run
           echo "Dry run only. Nothing was published."
 
-      - name: Report a partial release
+      - name: Report a release interruption
         if: ${{ failure() && steps.registry.outcome == 'success' && steps.registry.outputs.mode != 'dry-run' }}
         env:
+          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          set -euo pipefail
+          set +e
+          metadata="$(node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT" \
+            --verification exact-artifact 2>&1)"
+          registry_status=$?
+          set -e
+
           {
-            echo "## Partial release"
-            echo ""
-            echo "Publication or verification stopped before all four packages at $VERSION were proven."
-            echo "Re-run **workflow_dispatch** from the default branch with version \`$VERSION\`,"
-            echo "**dry_run** disabled, and **recover** enabled. Recovery checks out \`$RELEASE_TAG\`,"
-            echo "re-verifies the immutable prefix, and publishes only the missing suffix."
-            echo "Do not republish, force publish, or independently bump any package."
+            if [ "$registry_status" -ne 0 ]; then
+              echo "## Release state could not be verified"
+              echo ""
+              echo "Publication or verification stopped, and the exact npm state did not pass verification."
+              echo "Do not publish or recover until the Registry state is investigated."
+              echo ""
+              echo '```text'
+              printf '%s\n' "$metadata"
+              echo '```'
+            else
+              state="$(printf '%s\n' "$metadata" | sed -n 's/^state=//p')"
+              if [ "$state" = "absent" ]; then
+                echo "## Publication stopped before a verified prefix existed"
+                echo ""
+                echo "No package at $VERSION was verified on npm. Recovery requires a non-empty prefix."
+                echo "Confirm all four versions remain absent, correct the cause, and rerun the failed tag workflow."
+              elif [ "$state" = "partial" ]; then
+                echo "## Partial release"
+                echo ""
+                echo "Publication stopped after a verified immutable prefix at $VERSION."
+                echo "Re-run **workflow_dispatch** from the default branch with version \`$VERSION\`,"
+                echo "**dry_run** disabled, and **recover** enabled. Recovery checks out \`$RELEASE_TAG\`,"
+                echo "re-verifies the immutable prefix, and publishes only the missing suffix."
+              else
+                echo "## npm publication complete; release finalization stopped"
+                echo ""
+                echo "All four packages at $VERSION are exact on npm."
+                echo "Use deliberate recovery to re-verify them and finish GitHub Release creation."
+              fi
+              echo "Do not republish, force publish, or independently bump any package."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Summarise the release

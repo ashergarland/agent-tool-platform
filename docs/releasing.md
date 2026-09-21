@@ -12,9 +12,9 @@ Kit depends exactly on Runtime and Capability Registry at the release version. C
 stay at `0.0.0-development`; Capability Registry and Agent Kit also keep `private: true` until the
 release stamper removes those two guards in an ephemeral candidate.
 
-Runtime and Testkit 0.1.3 are currently public. Capability Registry and Agent Kit are not yet public,
-so the normal four-package path in section A becomes authoritative only after the explicit bootstrap
-in section C is completed.
+All four packages are public at 0.2.0. The one-time Capability Registry and Agent Kit bootstrap is
+complete, so the normal four-package path in section A is authoritative. Section C is retained only
+as historical context and must not be repeated.
 
 ## A. Normal four-package release after bootstrap
 
@@ -89,6 +89,77 @@ The workflow stamps all four candidates, runs every quality and package-consumer
 registry state without changing it, and runs `npm publish --dry-run` for all four workspaces. It
 does not publish, create a tag, or create a GitHub Release.
 
+### Exact artefact identity and platform-neutral content identity
+
+Release verification answers two different questions. Neither identity replaces the other.
+
+**EXACT RELEASE ARTIFACT IDENTITY** is npm's `dist.integrity` SRI for the complete compressed
+tarball. It answers:
+
+> Is this the exact tarball artefact expected from the canonical release environment?
+
+Normal publication and recovery always use this identity. The default
+`release-registry-state.mjs` mode is `exact-artifact`, and every Publish workflow invocation names
+that mode explicitly:
+
+```bash
+node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT" \
+  --verification exact-artifact
+```
+
+Exact reconstruction is authoritative only on Linux, the Platform's canonical release platform.
+The reviewed Publish workflow currently uses a GitHub-hosted Linux runner, Node 24, and pinned npm
+11.19.0. The workflow, rather than this document, remains the source of truth for those toolchain
+settings: `ubuntu-latest` and the Node 24 patch can move, and a runner, Node, npm, or archive-tooling
+change may legitimately change tarball bytes. Treat such changes as release-system changes and
+review them deliberately. An exact SRI mismatch never falls back to content-only acceptance during
+publication or recovery.
+
+**PLATFORM-NEUTRAL PACKAGE CONTENT IDENTITY** is a deterministic SHA-256 digest over the regular
+files inside the actual npm package tarball. It answers:
+
+> Does this npm package contain the expected deterministic package file set and file bytes
+> independent of archive-only platform metadata?
+
+Use the explicit diagnostic mode when comparing a candidate with npm from a supported development
+operating system. It requires the same release source, stamp, dependencies, and build output as the
+published candidate; an ordinary `0.0.0-development` checkout is not a release candidate:
+
+```bash
+git checkout --detach "v$VERSION"
+npm ci
+node scripts/stamp-release-version.mjs "$VERSION"
+npm run build
+node scripts/release-registry-state.mjs "$VERSION" "$RELEASE_COMMIT" \
+  --verification package-content
+```
+
+The verifier fails with explicit candidate-preparation guidance if package versions, privacy guards,
+internal dependencies, Registry data, or build output have not been prepared. It does not report
+those local-state mistakes as published package-content drift.
+
+This mode still verifies version, `gitHead`, repository identity, exact internal dependencies, the
+presence of registry SRI, and that the downloaded tarball matches npm's own SRI. It then safely
+reads the local and published package tarballs and computes `sha256:<64 lowercase hex>` over this
+canonical representation:
+
+1. normalize package-relative path separators to `/`;
+2. sort paths using deterministic JavaScript code-unit ordering;
+3. hash a versioned domain separator and file count;
+4. for each regular file, hash a 32-bit path-byte length, UTF-8 path bytes, unsigned 64-bit file
+   length, and exact file bytes.
+
+Added, removed, renamed, or byte-modified files therefore change the identity. Tar timestamps,
+gzip metadata, uid/gid, checkout paths, caches, and executable/archive mode bits do not participate.
+Executable mode is intentionally excluded because npm can derive different archive modes from the
+same package files on different hosts; exact SRI remains the authority for release-mode metadata.
+
+During the verified v0.2.0 bootstrap, Linux and Windows produced Runtime archives with different
+SRI values solely because two command files were archived as 0755 on Linux and 0644 on Windows.
+All 139 paths, lengths, and file bytes were identical, and Linux/npm 11.19.0 reproduced the
+published artefact byte-for-byte. Runtime 0.2.0 was valid. That incident is the reason the two
+identities are now reported separately.
+
 ### Partial release and recovery
 
 npm versions are immutable. The workflow never uses `--force` and never uploads an existing
@@ -146,29 +217,30 @@ Subsequent Runtime/Testkit releases, including the current known 0.1.3 release, 
 OIDC. The completed repository transition removed pre-publication-only assertions while retaining
 `0.0.0-development` as checked-in metadata.
 
-## C. Pending Capability Registry / Agent Kit bootstrap
+## C. Historical Capability Registry / Agent Kit bootstrap
 
-> **Not completed. Do not infer npm availability from this plan.** These are one-time operator
-> instructions for the first four-package Platform release.
+> **Bootstrap complete in September 2026.** Capability Registry and Agent Kit 0.2.0 were
+> first-published manually, Testkit 0.2.0 completed through recovery, and all four packages were
+> verified from the immutable `v0.2.0` source. This section is historical documentation and must not
+> be repeated.
 
-### Recommended first public version
+### Chosen first public version
 
-Use **0.2.0**, the next Platform minor after the known 0.1.3 release. Adding two supported public
-packages is a material v0 API expansion. Do not backfill them as 0.1.3: Runtime/Testkit 0.1.3 came
-from a different source commit and npm versions cannot be overwritten. All four 0.2.0 artefacts must
-come from the same `v0.2.0` commit.
+The bootstrap used **0.2.0**, the next Platform minor after the known 0.1.3 release. Adding two
+supported public packages was a material v0 API expansion. They were not backfilled as 0.1.3:
+Runtime/Testkit 0.1.3 came from a different source commit and npm versions cannot be overwritten.
+All four 0.2.0 artefacts came from the same `v0.2.0` commit.
 
-### Preconditions
+### Preconditions used
 
 1. Merge the reviewed publication-readiness change to `main`.
 2. Confirm all four 0.2.0 versions are absent with `npm view <name>@0.2.0 version`.
 3. Confirm the `main` worktree is clean and record `git rev-parse HEAD`.
 4. Create and push `v0.2.0`.
 
-The first tagged run is expected to publish Runtime 0.2.0 through its existing Trusted Publisher,
-wait until it is resolvable, and then stop at Capability Registry because that package cannot have
-an npm Trusted Publisher until it exists. The failure summary must report a partial release. Do not
-rerun the tag job and do not publish Testkit independently.
+The first tagged run published Runtime 0.2.0 through its existing Trusted Publisher, waited until it
+was resolvable, and then stopped at Capability Registry because that package could not have an npm
+Trusted Publisher until it existed. Testkit was not published independently.
 
 ### One-time maintainer publication
 
@@ -220,7 +292,7 @@ git-head/integrity comparison is their source-identity proof.
 Never put the maintainer credential in this repository, GitHub Actions, or a project `.npmrc`.
 `npm login` stores the temporary authenticated session in the operator's user-level configuration.
 
-### Add the two Trusted Publishers
+### Trusted Publishers added
 
 As soon as each new package exists, configure its npm Trusted Publisher:
 
@@ -230,7 +302,7 @@ As soon as each new package exists, configure its npm Trusted Publisher:
 
 Do not remove or alter the existing Runtime and Testkit publisher entries.
 
-### Complete 0.2.0 through the normal workflow
+### Completion through the normal workflow
 
 Run **Publish** from the default branch with:
 

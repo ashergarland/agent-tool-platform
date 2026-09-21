@@ -1,7 +1,8 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
-import { npmCliPath } from './lib/tarball.mjs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { npmCliPath, packPackage, packPackageSpec } from './lib/tarball.mjs';
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const repositoryUrl = 'git+https://github.com/ashergarland/agent-tool-platform.git';
@@ -43,7 +44,8 @@ const packages = [
 
 const usage =
   'Usage: node scripts/release-registry-state.mjs <version> <release-commit> ' +
-  '[--minimum-prefix <0-4>] [--attempts <positive-integer>] [--delay-ms <non-negative-integer>]\n';
+  '[--verification <exact-artifact|package-content>] [--minimum-prefix <0-4>] ' +
+  '[--attempts <positive-integer>] [--delay-ms <non-negative-integer>]\n';
 
 const args = process.argv.slice(2);
 const version = args.shift();
@@ -51,15 +53,21 @@ const releaseCommit = args.shift();
 let minimumPrefix = 0;
 let attempts = 1;
 let delayMs = 0;
+let verification = 'exact-artifact';
 
 while (args.length > 0) {
   const option = args.shift();
   const value = args.shift();
-  if (value === undefined || !/^\d+$/u.test(value)) {
+  if (value === undefined) {
     process.stderr.write(usage);
     process.exit(1);
   }
-  if (option === '--minimum-prefix') {
+  if (option === '--verification') {
+    verification = value;
+  } else if (!/^\d+$/u.test(value)) {
+    process.stderr.write(usage);
+    process.exit(1);
+  } else if (option === '--minimum-prefix') {
     minimumPrefix = Number(value);
   } else if (option === '--attempts') {
     attempts = Number(value);
@@ -75,6 +83,7 @@ if (
   !semanticVersion.test(version ?? '') ||
   version === developmentVersion ||
   !/^[0-9a-f]{40}$/u.test(releaseCommit ?? '') ||
+  !['exact-artifact', 'package-content'].includes(verification) ||
   minimumPrefix < 0 ||
   minimumPrefix > packages.length ||
   attempts < 1
@@ -87,7 +96,83 @@ const fixturePath = process.env.ATP_RELEASE_REGISTRY_FIXTURE;
 const fixture = fixturePath ? JSON.parse(readFileSync(resolve(fixturePath), 'utf8')) : undefined;
 const registryFixture = fixture?.registry;
 const integrityFixture = fixture?.localIntegrities;
+const localContentIdentityFixture = fixture?.localContentIdentities;
+const publishedContentIdentityFixture = fixture?.publishedContentIdentities;
 const localIntegrities = new Map();
+const localContentIdentities = new Map();
+const publishedContentIdentities = new Map();
+let contentIdentityRoot;
+
+const assertLocalContentCandidate = () => {
+  const failures = [];
+  for (const entry of packages) {
+    const manifestPath = resolve(repositoryRoot, entry.directory, 'package.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (manifest.version !== version) {
+      failures.push(
+        `${entry.name} has local version ${String(manifest.version)}, expected ${version}`,
+      );
+    }
+    if (manifest.private !== undefined) {
+      failures.push(`${entry.name} is still marked private`);
+    }
+    if (!existsSync(resolve(repositoryRoot, entry.directory, 'dist'))) {
+      failures.push(`${entry.name} has no built dist directory`);
+    }
+    for (const dependency of Object.keys(entry.dependencies)) {
+      if (manifest.dependencies?.[dependency] !== version) {
+        failures.push(
+          `${entry.name} has local dependency ${dependency}@${String(
+            manifest.dependencies?.[dependency],
+          )}, expected ${version}`,
+        );
+      }
+    }
+  }
+
+  const registryData = JSON.parse(
+    readFileSync(
+      resolve(repositoryRoot, 'packages/capability-registry/data/first-party-registry.json'),
+      'utf8',
+    ),
+  );
+  if (registryData.registryVersion !== version) {
+    failures.push(
+      `Capability Registry data has local version ${String(
+        registryData.registryVersion,
+      )}, expected ${version}`,
+    );
+  }
+
+  if (failures.length > 0) {
+    throw new Error(
+      'Package-content verification requires a stamped, built local release candidate. ' +
+        'Check out the release source, run npm ci, stamp the requested version, and build before ' +
+        `retrying:\n- ${failures.join('\n- ')}`,
+    );
+  }
+};
+
+if (fixture === undefined && verification === 'exact-artifact' && process.platform !== 'linux') {
+  process.stderr.write(
+    'Exact release artifact verification requires the canonical Linux release environment. ' +
+      'Use --verification package-content for platform-neutral package content verification.\n',
+  );
+  process.exit(1);
+}
+if (fixture === undefined && verification === 'package-content') {
+  assertLocalContentCandidate();
+}
+
+const contentDirectory = (label) => {
+  if (contentIdentityRoot === undefined) {
+    contentIdentityRoot = mkdtempSync(join(tmpdir(), 'atp-release-content-'));
+    process.once('exit', () => rmSync(contentIdentityRoot, { recursive: true, force: true }));
+  }
+  const directory = join(contentIdentityRoot, label);
+  mkdirSync(directory, { recursive: true });
+  return directory;
+};
 
 const parseJsonOutput = (output, packageName) => {
   const start = output.indexOf('{');
@@ -160,6 +245,53 @@ const localIntegrity = (entry) => {
   return integrity;
 };
 
+const localContentIdentity = (entry) => {
+  const cached = localContentIdentities.get(entry.name);
+  if (cached !== undefined) return cached;
+  if (fixture !== undefined) {
+    const expected = localContentIdentityFixture?.[entry.name];
+    if (typeof expected !== 'string' || !/^sha256:[0-9a-f]{64}$/u.test(expected)) {
+      throw new Error(`Registry fixture has no local content identity for ${entry.name}`);
+    }
+    localContentIdentities.set(entry.name, expected);
+    return expected;
+  }
+
+  const artifact = packPackage(
+    resolve(repositoryRoot, entry.directory),
+    contentDirectory(`local-${entry.key}`),
+  );
+  localContentIdentities.set(entry.name, artifact.contentIdentity);
+  return artifact.contentIdentity;
+};
+
+const publishedContentIdentity = (entry, metadata) => {
+  const cached = publishedContentIdentities.get(entry.name);
+  if (cached !== undefined) return cached;
+  if (fixture !== undefined) {
+    const observed = publishedContentIdentityFixture?.[entry.name];
+    if (typeof observed !== 'string' || !/^sha256:[0-9a-f]{64}$/u.test(observed)) {
+      throw new Error(`Registry fixture has no published content identity for ${entry.name}`);
+    }
+    publishedContentIdentities.set(entry.name, observed);
+    return observed;
+  }
+
+  const artifact = packPackageSpec(
+    `${entry.name}@${version}`,
+    contentDirectory(`registry-${entry.key}`),
+    repositoryRoot,
+  );
+  if (artifact.integrity !== metadata['dist.integrity']) {
+    throw new Error(
+      `${entry.name}@${version} downloaded with integrity ${String(artifact.integrity)}, ` +
+        `expected npm metadata integrity ${metadata['dist.integrity']}`,
+    );
+  }
+  publishedContentIdentities.set(entry.name, artifact.contentIdentity);
+  return artifact.contentIdentity;
+};
+
 const validatePublishedPackage = (entry, metadata) => {
   if (metadata.version !== version) {
     throw new Error(
@@ -183,12 +315,24 @@ const validatePublishedPackage = (entry, metadata) => {
   if (typeof metadata['dist.integrity'] !== 'string' || metadata['dist.integrity'].length === 0) {
     throw new Error(`${entry.name}@${version} has no registry integrity digest`);
   }
-  const expectedIntegrity = localIntegrity(entry);
-  if (metadata['dist.integrity'] !== expectedIntegrity) {
-    throw new Error(
-      `${entry.name}@${version} has integrity ${metadata['dist.integrity']}, ` +
-        `expected the tagged candidate integrity ${expectedIntegrity}`,
-    );
+  let contentIdentity;
+  if (verification === 'exact-artifact') {
+    const expectedIntegrity = localIntegrity(entry);
+    if (metadata['dist.integrity'] !== expectedIntegrity) {
+      throw new Error(
+        `${entry.name}@${version} has integrity ${metadata['dist.integrity']}, ` +
+          `expected the tagged candidate integrity ${expectedIntegrity}`,
+      );
+    }
+  } else {
+    const expectedContentIdentity = localContentIdentity(entry);
+    contentIdentity = publishedContentIdentity(entry, metadata);
+    if (contentIdentity !== expectedContentIdentity) {
+      throw new Error(
+        `${entry.name}@${version} has platform-neutral package content identity ` +
+          `${contentIdentity}, expected ${expectedContentIdentity}`,
+      );
+    }
   }
 
   const expectedDependencies = new Map(
@@ -210,15 +354,18 @@ const validatePublishedPackage = (entry, metadata) => {
       throw new Error(`${entry.name}@${version} must depend exactly on ${dependency}@${range}`);
     }
   }
+  return contentIdentity;
 };
 
 const inspect = () => {
   const states = packages.map((entry) => {
     const metadata = queryPackage(entry.name);
-    if (metadata !== null) validatePublishedPackage(entry, metadata);
+    const contentIdentity =
+      metadata === null ? undefined : validatePublishedPackage(entry, metadata);
     return {
       ...entry,
       exists: metadata !== null,
+      contentIdentity,
       attested:
         metadata?.['dist.attestations']?.provenance?.predicateType ===
         'https://slsa.dev/provenance/v1',
@@ -276,10 +423,14 @@ const missing = result.states.slice(result.publishedCount);
 const attested = published.filter((entry) => entry.attested);
 const unattested = published.filter((entry) => !entry.attested);
 
+process.stdout.write(`verification=${verification}\n`);
 process.stdout.write(`state=${state}\n`);
 process.stdout.write(`published_count=${result.publishedCount}\n`);
 for (const entry of result.states) {
   process.stdout.write(`${entry.key}_exists=${entry.exists}\n`);
+  if (entry.contentIdentity !== undefined) {
+    process.stdout.write(`${entry.key}_content_identity=${entry.contentIdentity}\n`);
+  }
 }
 process.stdout.write(`published_prefix=${published.map((entry) => entry.name).join(',')}\n`);
 process.stdout.write(`missing_suffix=${missing.map((entry) => entry.name).join(',')}\n`);
