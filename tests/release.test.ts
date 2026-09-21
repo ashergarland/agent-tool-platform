@@ -210,6 +210,24 @@ describe('release registry state', () => {
   const releaseCommit = 'a'.repeat(40);
   const version = '1.2.3';
   const stateScript = join(repositoryRoot, 'scripts', 'release-registry-state.mjs');
+  const statePackages = [
+    ['@agent-tool-platform/runtime', 'packages/runtime', {}],
+    ['@agent-tool-platform/capability-registry', 'packages/capability-registry', {}],
+    [
+      '@agent-tool-platform/agent-kit',
+      'packages/agent-kit',
+      {
+        '@agent-tool-platform/runtime': version,
+        '@agent-tool-platform/capability-registry': version,
+      },
+    ],
+    [
+      '@agent-tool-platform/testkit',
+      'packages/testkit',
+      { '@agent-tool-platform/runtime': version },
+    ],
+  ] as const;
+  const contentIdentity = `sha256:${'1'.repeat(64)}`;
   const packageMetadata = (
     directory: string,
     dependencies: Record<string, string> = {},
@@ -224,62 +242,78 @@ describe('release registry state', () => {
     dependencies,
     'dist.integrity': 'sha512-release-fixture',
   });
-  const runState = (metadata: Record<string, unknown>) => {
+  const runState = (
+    metadata: Record<string, unknown>,
+    options: {
+      readonly verification?: 'exact-artifact' | 'package-content';
+      readonly localContentIdentity?: string;
+      readonly publishedContentIdentity?: string;
+    } = {},
+  ) => {
     const root = mkdtempSync(join(tmpdir(), 'atp-registry-state-'));
     temporaryRoots.push(root);
     const fixture = join(root, 'registry.json');
+    const packageNames = statePackages.map(([name]) => name);
     writeFileSync(
       fixture,
       `${JSON.stringify({
         registry: metadata,
         localIntegrities: Object.fromEntries(
-          [
-            '@agent-tool-platform/runtime',
-            '@agent-tool-platform/capability-registry',
-            '@agent-tool-platform/agent-kit',
-            '@agent-tool-platform/testkit',
-          ].map((name) => [name, 'sha512-release-fixture']),
+          packageNames.map((name) => [name, 'sha512-release-fixture']),
+        ),
+        localContentIdentities: Object.fromEntries(
+          packageNames.map((name) => [name, options.localContentIdentity ?? contentIdentity]),
+        ),
+        publishedContentIdentities: Object.fromEntries(
+          packageNames.map((name) => [name, options.publishedContentIdentity ?? contentIdentity]),
         ),
       })}\n`,
     );
-    return spawnSync(process.execPath, [stateScript, version, releaseCommit], {
-      cwd: repositoryRoot,
-      encoding: 'utf8',
-      env: { ...process.env, ATP_RELEASE_REGISTRY_FIXTURE: fixture },
-    });
+    return spawnSync(
+      process.execPath,
+      [
+        stateScript,
+        version,
+        releaseCommit,
+        '--verification',
+        options.verification ?? 'exact-artifact',
+      ],
+      {
+        cwd: repositoryRoot,
+        encoding: 'utf8',
+        env: { ...process.env, ATP_RELEASE_REGISTRY_FIXTURE: fixture },
+      },
+    );
   };
 
-  it('classifies an empty release and a valid published prefix', () => {
-    const empty = runState({});
-    expect(empty.status).toBe(0);
-    expect(empty.stdout).toContain('state=absent');
-    expect(empty.stdout).toContain('published_count=0');
+  it.each(Array.from({ length: 16 }, (_, mask) => mask.toString(2).padStart(4, '0')))(
+    'classifies Registry presence subset %s',
+    (presence) => {
+      const metadata = Object.fromEntries(
+        statePackages.flatMap(([name, directory, dependencies], index) =>
+          presence[index] === '1' ? [[name, packageMetadata(directory, dependencies)]] : [],
+        ),
+      );
+      const result = runState(metadata);
+      const validPrefixes = new Set(['0000', '1000', '1100', '1110', '1111']);
 
-    const prefix = runState({
-      '@agent-tool-platform/runtime': packageMetadata('packages/runtime'),
-      '@agent-tool-platform/capability-registry': packageMetadata('packages/capability-registry'),
-      '@agent-tool-platform/agent-kit': packageMetadata('packages/agent-kit', {
-        '@agent-tool-platform/runtime': version,
-        '@agent-tool-platform/capability-registry': version,
-      }),
-    });
-    expect(prefix.status).toBe(0);
-    expect(prefix.stdout).toContain('state=partial');
-    expect(prefix.stdout).toContain('published_count=3');
-    expect(prefix.stdout).toContain('missing_suffix=@agent-tool-platform/testkit');
-  });
+      if (!validPrefixes.has(presence)) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain('Unsafe release state');
+        return;
+      }
 
-  it('refuses out-of-order, wrong-source, and inconsistent dependency states', () => {
-    const outOfOrder = runState({
-      '@agent-tool-platform/runtime': packageMetadata('packages/runtime'),
-      '@agent-tool-platform/agent-kit': packageMetadata('packages/agent-kit', {
-        '@agent-tool-platform/runtime': version,
-        '@agent-tool-platform/capability-registry': version,
-      }),
-    });
-    expect(outOfOrder.status).not.toBe(0);
-    expect(outOfOrder.stderr).toContain('Unsafe release state');
+      const publishedCount = presence.replace(/0/gu, '').length;
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('verification=exact-artifact');
+      expect(result.stdout).toContain(`published_count=${publishedCount}`);
+      expect(result.stdout).toContain(
+        `state=${publishedCount === 0 ? 'absent' : publishedCount === 4 ? 'complete' : 'partial'}`,
+      );
+    },
+  );
 
+  it('refuses wrong-source and inconsistent dependency states', () => {
     const wrongSource = packageMetadata('packages/runtime');
     wrongSource.gitHead = 'b'.repeat(40);
     const sourceResult = runState({
@@ -306,5 +340,50 @@ describe('release registry state', () => {
     });
     expect(integrityResult.status).not.toBe(0);
     expect(integrityResult.stderr).toContain('tagged candidate integrity');
+  });
+
+  it('keeps exact SRI strict while explicit package-content verification ignores archive-only drift', () => {
+    const runtime = packageMetadata('packages/runtime');
+    runtime['dist.integrity'] = 'sha512-platform-specific-archive';
+
+    const exact = runState({ '@agent-tool-platform/runtime': runtime });
+    expect(exact.status).not.toBe(0);
+    expect(exact.stderr).toContain('tagged candidate integrity');
+
+    const content = runState(
+      { '@agent-tool-platform/runtime': runtime },
+      { verification: 'package-content' },
+    );
+    expect(content.status).toBe(0);
+    expect(content.stdout).toContain('verification=package-content');
+    expect(content.stdout).toContain(`runtime_content_identity=${contentIdentity}`);
+
+    const changedContent = runState(
+      { '@agent-tool-platform/runtime': runtime },
+      {
+        verification: 'package-content',
+        publishedContentIdentity: `sha256:${'2'.repeat(64)}`,
+      },
+    );
+    expect(changedContent.status).not.toBe(0);
+    expect(changedContent.stderr).toContain('platform-neutral package content identity');
+  });
+
+  it('rejects package-content verification from an unstamped or unbuilt checkout', () => {
+    const result = spawnSync(
+      process.execPath,
+      [stateScript, version, releaseCommit, '--verification', 'package-content'],
+      {
+        cwd: repositoryRoot,
+        encoding: 'utf8',
+        env: { ...process.env, ATP_RELEASE_REGISTRY_FIXTURE: '' },
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      'Package-content verification requires a stamped, built local release candidate',
+    );
+    expect(result.stderr).toContain(`${runtimeName} has local version ${developmentVersion}`);
   });
 });

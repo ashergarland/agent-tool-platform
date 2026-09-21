@@ -369,6 +369,7 @@ describe('release workflow', () => {
   it('handles absent, complete, partial, and out-of-order registry states explicitly', () => {
     const guard = steps.find((step) => step.id === 'registry');
     expect(guard?.run).toContain('scripts/release-registry-state.mjs');
+    expect(guard?.run).toContain('--verification exact-artifact');
     expect(guard?.run).toContain('mode="normal"');
     expect(guard?.run).toContain('already released; npm versions are immutable');
     expect(guard?.run).toContain('mode="recovery"');
@@ -386,17 +387,25 @@ describe('release workflow', () => {
     const verify = steps.find((step) => step.id === 'verify');
     expect(verify?.run).toContain('--minimum-prefix 4');
     for (const wait of [...waits, verify]) {
+      expect(wait?.run).toContain('--verification exact-artifact');
       expect(wait?.run).toContain('--attempts 18');
       expect(wait?.run).toContain('--delay-ms 10000');
     }
   });
 
-  it('reports partial releases with the deliberate recovery path', () => {
-    const report = steps.find((step) => step.name === 'Report a partial release');
+  it('distinguishes empty, partial, complete, and unverifiable interrupted releases', () => {
+    const report = steps.find((step) => step.name === 'Report a release interruption');
     expect(report?.if).toContain('failure()');
+    expect(report?.run).toContain('--verification exact-artifact');
+    expect(report?.run).toContain('registry_status');
+    expect(report?.run).toContain('state" = "absent');
+    expect(report?.run).toContain('Recovery requires a non-empty prefix');
+    expect(report?.run).toContain('state" = "partial');
     expect(report?.run).toContain('workflow_dispatch');
     expect(report?.run).toContain('recover');
     expect(report?.run).toContain('missing suffix');
+    expect(report?.run).toContain('state could not be verified');
+    expect(report?.run).toContain('npm publication complete');
     expect(report?.run).toContain('Do not republish');
   });
 
@@ -482,10 +491,12 @@ describe('release documentation', () => {
     expect(releasing).toContain('@agent-tool-platform/runtime@0.1.0');
   });
 
-  it('documents the pending new-package bootstrap and source proof', () => {
+  it('preserves the completed new-package bootstrap and source proof as history', () => {
     const bootstrap = releasing.slice(releasing.indexOf('## C.'));
-    expect(bootstrap).toContain('Not completed');
-    expect(bootstrap).toContain('Use **0.2.0**');
+    expect(bootstrap).toContain('Bootstrap complete in September 2026');
+    expect(bootstrap).toContain('historical documentation');
+    expect(bootstrap).toMatch(/must not\s+(?:>\s*)?be repeated/iu);
+    expect(bootstrap).toContain('used **0.2.0**');
     const registryAt = bootstrap.indexOf(
       'npm publish --workspace @agent-tool-platform/capability-registry --access public',
     );
@@ -498,6 +509,25 @@ describe('release documentation', () => {
     expect(bootstrap).toContain('gitHead');
     expect(bootstrap).toContain('dist.integrity');
     expect(bootstrap).toContain('publish only Testkit');
+  });
+
+  it('distinguishes canonical exact artefact identity from platform-neutral content identity', () => {
+    for (const value of [
+      'EXACT RELEASE ARTIFACT IDENTITY',
+      'PLATFORM-NEUTRAL PACKAGE CONTENT IDENTITY',
+      '--verification exact-artifact',
+      '--verification package-content',
+      'sha256:<64 lowercase hex>',
+      'GitHub-hosted Linux runner',
+      'npm 11.19.0',
+      '0755 on Linux and 0644 on Windows',
+    ]) {
+      expect(releasing).toContain(value);
+    }
+    expect(releasing).toMatch(/exact SRI mismatch never falls back/iu);
+    expect(releasing).toMatch(/Neither identity replaces the other/iu);
+    expect(readme).toMatch(/exact npm tarball SRI.*platform-neutral/isu);
+    expect(readme).toMatch(/canonical Linux release environment/iu);
   });
 
   it('documents the npm-side Trusted Publisher configuration for all packages', () => {
@@ -515,11 +545,15 @@ describe('release documentation', () => {
     expect(releasing).toMatch(/two-factor authentication.*disallow tokens/isu);
   });
 
-  it('states the current public and pending package status truthfully', () => {
-    expect(releasing).toMatch(/Runtime and Testkit 0\.1\.3 are currently public/iu);
-    expect(releasing).toMatch(/Capability Registry and Agent Kit are not yet public/isu);
-    expect(readme).toMatch(/Runtime and Testkit 0\.1\.3 are publicly available from npm/iu);
-    expect(readme).toMatch(/have not completed.*one-time public-package.*bootstrap/su);
+  it('states the current four-package public status truthfully', () => {
+    expect(releasing).toMatch(/All four packages are public at 0\.2\.0/iu);
+    expect(releasing).toMatch(
+      /one-time Capability Registry and Agent Kit bootstrap is\s+complete/iu,
+    );
+    expect(readme).toMatch(
+      /Runtime,\s+Capability Registry,\s+Agent Kit,\s+and Testkit 0\.2\.0 are publicly\s+>\s*available/iu,
+    );
+    expect(readme).toMatch(/Current public baseline\s*\|\s*0\.2\.0/iu);
   });
 
   it('documents all consumers and forbids local M5.5 package wiring', () => {

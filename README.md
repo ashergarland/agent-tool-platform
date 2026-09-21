@@ -8,10 +8,9 @@ behaviour: no ASTs, no repositories, no Azure resources, no documents, no images
 capability mechanics and the host-neutral composition layer so capabilities and agents can reuse
 contracts without duplicating runtimes or host-specific state.
 
-> **Status: v0 foundation.** Runtime and Testkit 0.1.3 are publicly available from npm. Capability
-> Registry and Agent Kit are prepared for, but have not completed, their one-time public-package
-> bootstrap. No infrastructure has been deployed. Future four-package versions are published only
-> from intentional release tags; see [`docs/releasing.md`](docs/releasing.md).
+> **Status: v0 foundation.** Runtime, Capability Registry, Agent Kit, and Testkit 0.2.0 are publicly
+> available from npm. No infrastructure has been deployed. Future four-package versions are
+> published only from intentional release tags; see [`docs/releasing.md`](docs/releasing.md).
 
 ---
 
@@ -102,10 +101,9 @@ against the runtime deployment contract. Agent Kit consumes the registry through
 
 ### Installation
 
-Runtime and Testkit are public and scoped to `@agent-tool-platform` on the primary npm registry.
+All four packages are public and scoped to `@agent-tool-platform` on the primary npm registry.
 Capability Registry and Agent Kit keep `private: true` in checked-in development manifests until
-the release stamper removes that guard in an ephemeral candidate. Their first publication remains
-an explicit operator bootstrap; the commands below become consumer commands after that bootstrap.
+the release stamper removes that guard in an ephemeral candidate.
 
 ```bash
 # production capability dependency
@@ -114,21 +112,26 @@ npm install @agent-tool-platform/runtime
 # capability development and tests
 npm install -D @agent-tool-platform/testkit
 
-# M5.5 composition tooling, after its one-time bootstrap
-npm install @agent-tool-platform/capability-registry@X.Y.Z
-npm install @agent-tool-platform/agent-kit@X.Y.Z
+# composition tooling
+npm install @agent-tool-platform/capability-registry
+npm install @agent-tool-platform/agent-kit
 ```
 
 For v0 all four packages are released in lockstep. Testkit depends exactly on Runtime, and Agent Kit
 depends exactly on Runtime and Capability Registry at its own version:
 
-| Release state              | Runtime | Registry | Agent Kit | Testkit |
-| -------------------------- | ------- | -------- | --------- | ------- |
-| Current public baseline    | 0.1.3   | —        | —         | 0.1.3   |
-| First four-package release | X.Y.Z   | X.Y.Z    | X.Y.Z     | X.Y.Z   |
+| Release state           | Runtime | Registry | Agent Kit | Testkit |
+| ----------------------- | ------- | -------- | --------- | ------- |
+| Current public baseline | 0.2.0   | 0.2.0    | 0.2.0     | 0.2.0   |
+| Future release          | X.Y.Z   | X.Y.Z    | X.Y.Z     | X.Y.Z   |
 
 Installing mismatched Platform versions is unsupported. npm may install duplicate Runtime or
 Registry copies, and the packages would no longer share one compatibility contract.
+
+Release verification deliberately distinguishes exact npm tarball SRI from a platform-neutral
+digest of package paths and bytes. Publication and recovery require exact artefact identity in the
+canonical Linux release environment; cross-platform diagnostics use package content identity
+without weakening that release gate. See [Releasing](docs/releasing.md) for the algorithm and usage.
 
 The future `agent-composition-template` consumer must pin Registry and Agent Kit to a real published
 Platform version. It must not use `file:` dependencies, copied Platform source, or a sibling

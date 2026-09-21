@@ -834,7 +834,10 @@ try {
       }
     }
 
-    note(`${name}@${manifest.version}: packed ${artefact.files.length} files`);
+    note(
+      `${name}@${manifest.version}: packed ${artefact.files.length} files; ` +
+        `package content identity ${artefact.contentIdentity}`,
+    );
   }
 
   if (failures.length === 0) {
