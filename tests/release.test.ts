@@ -31,7 +31,9 @@ const releaseFiles = [
   'packages/runtime/package.json',
   'packages/testkit/package.json',
   'examples/minimal-capability/package.json',
+  'scripts/lib/tarball.mjs',
   'scripts/release-check.mjs',
+  'scripts/release-registry-state.mjs',
   'scripts/stamp-release-version.mjs',
 ];
 
@@ -370,11 +372,18 @@ describe('release registry state', () => {
   });
 
   it('rejects package-content verification from an unstamped or unbuilt checkout', () => {
+    const root = createReleaseFixture();
     const result = spawnSync(
       process.execPath,
-      [stateScript, version, releaseCommit, '--verification', 'package-content'],
+      [
+        join(root, 'scripts', 'release-registry-state.mjs'),
+        version,
+        releaseCommit,
+        '--verification',
+        'package-content',
+      ],
       {
-        cwd: repositoryRoot,
+        cwd: root,
         encoding: 'utf8',
         env: { ...process.env, ATP_RELEASE_REGISTRY_FIXTURE: '' },
       },
