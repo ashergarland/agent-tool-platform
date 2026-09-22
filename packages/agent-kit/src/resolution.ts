@@ -19,6 +19,16 @@ import type {
 
 export type BindingMode = 'hybrid' | 'local' | 'remote';
 
+export interface ResolvedHttpClientHeader {
+  readonly name: string;
+  readonly configurationName: string;
+  readonly prefix: string;
+}
+
+export interface ResolvedHttpClientBinding {
+  readonly headers: readonly ResolvedHttpClientHeader[];
+}
+
 export interface ExecutionBinding {
   readonly key: string;
   readonly id: string;
@@ -27,6 +37,7 @@ export interface ExecutionBinding {
   readonly profileId: string;
   readonly dimensions: DeploymentProfileDimensions;
   readonly artifact: ResolvedCapabilityArtifact;
+  readonly httpClient?: ResolvedHttpClientBinding;
   readonly setupRequired: boolean;
   readonly requiredSecretNames: readonly string[];
   readonly providerPrerequisites: CapabilityProfileSummary['prerequisites']['provider'];
@@ -137,22 +148,43 @@ const resolveArtifact = (
 const createBinding = (
   capability: CapabilityEntry,
   candidate: BindingCandidate,
-): ExecutionBinding => ({
-  key: capabilityBindingKey(capability.id, capability.version.value, candidate.profile.id),
-  id: candidate.binding.id,
-  mode: candidate.binding.availability,
-  interface: candidate.binding.interface,
-  profileId: candidate.profile.id,
-  dimensions: candidate.profile.dimensions,
-  artifact: resolveArtifact(candidate.artifact, capability.source.revision),
-  setupRequired: candidate.profile.prerequisites.setupRequired,
-  requiredSecretNames: [...candidate.profile.prerequisites.requiredSecrets].sort(compareCodeUnits),
-  providerPrerequisites: [...candidate.profile.prerequisites.provider].sort((left, right) =>
-    compareCodeUnits(left.id, right.id),
-  ),
-  permissions: [...candidate.profile.permissions.scopes].sort(compareCodeUnits),
-  readinessSignals: [...candidate.profile.readiness.signals].sort(compareCodeUnits),
-});
+): ExecutionBinding => {
+  const httpClient =
+    candidate.binding.client === undefined
+      ? undefined
+      : {
+          headers: candidate.binding.client.http.headers
+            .map((header) => ({
+              name: header.name,
+              configurationName: header.value.name,
+              prefix: header.value.prefix ?? '',
+            }))
+            .sort(
+              (left, right) =>
+                compareCodeUnits(left.name.toLowerCase(), right.name.toLowerCase()) ||
+                compareCodeUnits(left.name, right.name),
+            ),
+        };
+  return {
+    key: capabilityBindingKey(capability.id, capability.version.value, candidate.profile.id),
+    id: candidate.binding.id,
+    mode: candidate.binding.availability,
+    interface: candidate.binding.interface,
+    profileId: candidate.profile.id,
+    dimensions: candidate.profile.dimensions,
+    artifact: resolveArtifact(candidate.artifact, capability.source.revision),
+    ...(httpClient === undefined ? {} : { httpClient }),
+    setupRequired: candidate.profile.prerequisites.setupRequired,
+    requiredSecretNames: [...candidate.profile.prerequisites.requiredSecrets].sort(
+      compareCodeUnits,
+    ),
+    providerPrerequisites: [...candidate.profile.prerequisites.provider].sort((left, right) =>
+      compareCodeUnits(left.id, right.id),
+    ),
+    permissions: [...candidate.profile.permissions.scopes].sort(compareCodeUnits),
+    readinessSignals: [...candidate.profile.readiness.signals].sort(compareCodeUnits),
+  };
+};
 
 const resolveSelection = async (
   selection: CapabilitySelection,

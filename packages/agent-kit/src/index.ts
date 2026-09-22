@@ -48,6 +48,8 @@ export {
   type ExecutionBinding,
   type IncompatibleCapability,
   type ResolvedCapability,
+  type ResolvedHttpClientBinding,
+  type ResolvedHttpClientHeader,
 } from './resolution.js';
 export {
   composeInstructions,

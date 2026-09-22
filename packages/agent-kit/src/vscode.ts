@@ -3,7 +3,7 @@ import { AgentKitError } from './errors.js';
 import type { HostAdapter, HostAdapterGenerationInput, HostCompatibility } from './host-adapter.js';
 import type { ResolvedCapabilityArtifact } from './schemas.js';
 
-export const VSCODE_ADAPTER_SCHEMA_VERSION = 1;
+export const VSCODE_ADAPTER_SCHEMA_VERSION = 2;
 
 export interface VsCodeAdapterOutput {
   readonly hostId: 'vscode';
@@ -95,10 +95,18 @@ const evaluateVsCode = ({
     if (binding.interface !== 'http') {
       reasons.push('hosted profiles must expose an HTTP entrypoint for VS Code');
     }
-    if (profile.prerequisites.requiredSecrets.length > 0) {
-      reasons.push(
-        'authenticated HTTP bindings require a registry-defined client header mapping that is not available',
+    if (binding.interface === 'http') {
+      const mappedConfigurations = new Set(
+        binding.client?.http.headers.map((header) => header.value.name) ?? [],
       );
+      const missingConfigurations = profile.prerequisites.requiredSecrets
+        .filter((name) => !mappedConfigurations.has(name))
+        .sort(compareCodeUnits);
+      if (missingConfigurations.length > 0) {
+        reasons.push(
+          `authenticated HTTP bindings require explicit client header mappings for configuration: ${missingConfigurations.slice(0, 10).join(', ')}`,
+        );
+      }
     }
   } else {
     if (binding.interface !== 'stdio') {
@@ -130,6 +138,7 @@ type VsCodeServer =
   | {
       readonly type: 'http';
       readonly url: string;
+      readonly headers?: Readonly<Record<string, string>>;
     };
 
 const localServer = (
@@ -200,9 +209,31 @@ const generateVsCode = (input: HostAdapterGenerationInput): VsCodeAdapterOutput 
         id: endpointInputId,
         description: `${capability.capability.displayName} MCP endpoint`,
       });
+      const headers: Record<string, string> = {};
+      for (const secretName of capability.binding.requiredSecretNames) {
+        const secretInputId = inputId(serverId, secretName);
+        if (usedInputIds.has(secretInputId)) {
+          throw new AgentKitError(
+            'INVALID_REGISTRY_RECORD',
+            `Configuration names map to duplicate VS Code input id ${secretInputId}.`,
+          );
+        }
+        usedInputIds.add(secretInputId);
+        inputs.push({
+          type: 'promptString',
+          id: secretInputId,
+          description: `${capability.capability.displayName}: ${secretName}`,
+          password: true,
+        });
+      }
+      for (const header of capability.binding.httpClient?.headers ?? []) {
+        headers[header.name] =
+          `${header.prefix}\${input:${inputId(serverId, header.configurationName)}}`;
+      }
       servers[serverId] = {
         type: 'http',
         url: `\${input:${endpointInputId}}`,
+        ...(Object.keys(headers).length === 0 ? {} : { headers }),
       };
       continue;
     }

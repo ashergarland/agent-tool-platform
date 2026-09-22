@@ -336,6 +336,18 @@ export const validateCapabilityConsistency = (
     for (const binding of entry.bindings) {
       const profile = profiles.get(binding.profileId);
       const artifact = artifacts.get(binding.artifactId);
+      const clientHeaders = binding.client?.http.headers ?? [];
+      if (binding.client !== undefined && binding.interface !== 'http') {
+        errors.push(
+          `${source}: binding ${binding.id} HTTP client mapping requires the http interface`,
+        );
+      }
+      addDuplicateErrors(
+        errors,
+        source,
+        `${binding.id} HTTP client header name (case-insensitive)`,
+        clientHeaders.map((header) => header.name.toLowerCase()),
+      );
       if (profile === undefined) {
         errors.push(
           `${source}: binding ${binding.id} references unknown profile ${binding.profileId}`,
@@ -355,6 +367,24 @@ export const validateCapabilityConsistency = (
         }
         if (profile.dimensions.access === 'authenticated-service' && binding.interface !== 'http') {
           errors.push(`${source}: authenticated binding ${binding.id} must use the http interface`);
+        }
+        const requiredConfigurations = new Set(profile.prerequisites.requiredSecrets);
+        for (const header of clientHeaders) {
+          if (!requiredConfigurations.has(header.value.name)) {
+            errors.push(
+              `${source}: binding ${binding.id} HTTP client header ${header.name} references undeclared configuration ${header.value.name}`,
+            );
+          }
+        }
+        if (binding.availability === 'remote' && binding.interface === 'http') {
+          const mappedConfigurations = new Set(clientHeaders.map((header) => header.value.name));
+          for (const name of profile.prerequisites.requiredSecrets) {
+            if (!mappedConfigurations.has(name)) {
+              errors.push(
+                `${source}: binding ${binding.id} has no HTTP client mapping for required configuration ${name}`,
+              );
+            }
+          }
         }
         if (
           artifact !== undefined &&

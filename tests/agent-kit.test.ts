@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   capabilityEntrySchemaId,
+  capabilityRegistrySchemaVersion,
   type CapabilityEntry,
   type CapabilityProfileSummary,
   type CapabilityRegistryReader,
@@ -96,7 +97,7 @@ const entryFor = (
         : 'npm-package';
   return {
     $schema: capabilityEntrySchemaId,
-    schemaVersion: '1.0.0',
+    schemaVersion: capabilityRegistrySchemaVersion,
     kind: 'capability',
     id,
     displayName,
@@ -156,6 +157,24 @@ const entryFor = (
         interface:
           kind === 'remote' ? 'http' : kind === 'incompatible-source' ? 'library' : 'stdio',
         availability: kind === 'remote' ? 'remote' : kind === 'hybrid' ? 'hybrid' : 'local',
+        ...(kind === 'remote'
+          ? {
+              client: {
+                http: {
+                  headers: [
+                    {
+                      name: 'Authorization',
+                      value: {
+                        source: 'configuration' as const,
+                        name: profile.prerequisites.requiredSecrets[0]!,
+                        prefix: 'Bearer ',
+                      },
+                    },
+                  ],
+                },
+              },
+            }
+          : {}),
       },
     ],
     stateChanging: kind === 'hybrid',
@@ -389,6 +408,7 @@ describe('capability and binding resolution', () => {
   it('represents local, hybrid, and remote modes from canonical registry bindings', async () => {
     const remote = entryFor('azure', 'Azure', 'remote');
     remote.profiles[0]!.prerequisites.requiredSecrets = [];
+    delete remote.bindings[0]!.client;
     const capabilities = [
       entryFor('ast-summarizer', 'AST Summarizer'),
       entryFor('vision', 'Vision', 'hybrid'),
@@ -411,25 +431,103 @@ describe('capability and binding resolution', () => {
     ]);
   });
 
-  it('rejects authenticated HTTP bindings until the registry defines client header mapping', async () => {
+  it('fails closed when authenticated HTTP bindings omit an explicit client mapping', async () => {
     const capability = entryFor('azure', 'Azure', 'remote');
+    const profile = capability.profiles[0]!;
+    const binding = capability.bindings[0]!;
+    const artifact = capability.artifacts[0]!;
+    delete binding.client;
     const registry = new FixtureRegistry([capability]);
-    const resolution = await resolveAgentDefinition(
-      definition([{ id: capability.id }]),
-      registry,
-      vscodeHostAdapter,
-    );
 
-    expect(resolution.capabilities[0]).toMatchObject({
-      status: 'incompatible',
-      compatibility: {
-        reasons: [expect.stringContaining('client header mapping')],
+    expect(vscodeHostAdapter.evaluate({ profile, binding, artifact })).toEqual({
+      state: 'incompatible',
+      reasons: [
+        'authenticated HTTP bindings require explicit client header mappings for configuration: AZURE_TOKEN',
+      ],
+    });
+    await expectAgentKitError(
+      () =>
+        resolveAgentDefinition(definition([{ id: capability.id }]), registry, vscodeHostAdapter),
+      'INVALID_REGISTRY_RECORD',
+    );
+  });
+
+  it('resolves and generates authenticated HTTP headers without credential values', async () => {
+    const capability = entryFor('azure', 'Azure', 'remote');
+    capability.profiles[0]!.prerequisites.requiredSecrets.push('SECOND_TOKEN');
+    capability.bindings[0]!.client!.http.headers.unshift({
+      name: 'X-Second',
+      value: {
+        source: 'configuration',
+        name: 'SECOND_TOKEN',
+        prefix: '',
       },
     });
-    expect(createReadinessPlan(resolution).capabilities[0]?.state).toBe('incompatible-binding');
-    await expectAgentKitError(
-      () => buildVsCodeAgent(definition([{ id: capability.id }]), { registry }),
-      'INCOMPATIBLE_BINDING',
+    const registry = new FixtureRegistry([capability]);
+    const build = await buildVsCodeAgent(definition([{ id: capability.id }]), { registry });
+    const resolved = build.capabilities[0]!;
+
+    expect(resolved.binding.httpClient).toEqual({
+      headers: [
+        {
+          name: 'Authorization',
+          configurationName: 'AZURE_TOKEN',
+          prefix: 'Bearer ',
+        },
+        {
+          name: 'X-Second',
+          configurationName: 'SECOND_TOKEN',
+          prefix: '',
+        },
+      ],
+    });
+    expect(build.lock.schemaVersion).toBe(2);
+    expect(build.lock.build.adapters).toEqual([{ id: 'vscode', schemaVersion: 2 }]);
+    expect(build.lock.capabilities[0]?.binding.client).toEqual({
+      http: {
+        headers: [
+          {
+            name: 'Authorization',
+            configuration: 'AZURE_TOKEN',
+            prefix: 'Bearer ',
+          },
+          {
+            name: 'X-Second',
+            configuration: 'SECOND_TOKEN',
+            prefix: '',
+          },
+        ],
+      },
+    });
+
+    const mcp = JSON.parse(build.adapter.files[1].content) as {
+      readonly inputs: readonly { readonly id: string; readonly password?: boolean }[];
+      readonly servers: Readonly<
+        Record<string, { readonly headers?: Readonly<Record<string, string>> }>
+      >;
+    };
+    expect(mcp.inputs).toEqual([
+      expect.objectContaining({ id: 'azure-azure-token', password: true }),
+      expect.objectContaining({ id: 'azure-endpoint' }),
+      expect.objectContaining({ id: 'azure-second-token', password: true }),
+    ]);
+    expect(mcp.servers.azure?.headers).toEqual({
+      Authorization: 'Bearer ${input:azure-azure-token}',
+      'X-Second': '${input:azure-second-token}',
+    });
+    expect(build.lockText).not.toContain('synthetic-secret-value');
+    expect(build.adapter.files[1].content).not.toContain('synthetic-secret-value');
+    expect(build.readiness.capabilities[0]?.state).toBe('missing-configuration');
+    expect(build.readiness.capabilities[0]?.requirements).toEqual(
+      expect.arrayContaining([
+        { kind: 'configuration', state: 'missing', name: 'AZURE_TOKEN' },
+        { kind: 'configuration', state: 'missing', name: 'SECOND_TOKEN' },
+        { kind: 'remote-connection', state: 'setup-required' },
+        expect.objectContaining({
+          kind: 'provider-prerequisite',
+          state: 'setup-required',
+        }),
+      ]),
     );
   });
 
@@ -576,6 +674,10 @@ describe('deterministic build outputs', () => {
     mutated.endpoint = 'https://private.invalid/mcp';
     expect(() => serializeAgentLock(mutated)).toThrow(/invalid/u);
 
+    const priorSchema = structuredClone(build.lock) as Record<string, unknown>;
+    priorSchema.schemaVersion = 1;
+    expect(() => serializeAgentLock(priorSchema)).toThrow(/invalid/u);
+
     const wrongArtifactKind = structuredClone(build.lock);
     Object.assign(wrongArtifactKind.capabilities[0]!.artifact, {
       identifier: 'https://public.example/payload',
@@ -588,7 +690,6 @@ describe('deterministic build outputs', () => {
       entryFor('vision', 'Vision', 'hybrid'),
       entryFor('azure', 'Azure', 'remote'),
     ];
-    capabilities[1]!.profiles[0]!.prerequisites.requiredSecrets = [];
     capabilities[0]!.description = 'Catalog-only boundary marker.';
     capabilities[0]!.routing.summary = 'Routing-only marker.';
     capabilities[0]!.profiles[0]!.prerequisites.summary = 'Setup-only prerequisite marker.';
@@ -624,6 +725,7 @@ describe('deterministic build outputs', () => {
       entryFor('azure', 'Azure', 'remote'),
     ];
     capabilities[2]!.profiles[0]!.prerequisites.requiredSecrets = [];
+    delete capabilities[2]!.bindings[0]!.client;
     const registry = new FixtureRegistry(capabilities);
     const resolution = await resolveAgentDefinition(
       definition(capabilities.map((capability) => ({ id: capability.id }))),
