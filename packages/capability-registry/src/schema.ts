@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const capabilityRegistrySchemaVersion = '1.0.0';
+export const capabilityRegistrySchemaVersion = '1.1.0';
 export const capabilityRegistryKind = 'capability-registry';
 export const capabilityEntryKind = 'capability';
 
@@ -50,6 +50,7 @@ const fullGitShaPattern = /^[0-9a-f]{40}$/u;
 const semanticVersionPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u;
 const repositoryReferencePattern = /^(?!\/)(?![A-Za-z]:)(?!.*\\)(?!.*(?:^|\/)\.\.(?:\/|$))\S+$/u;
+const httpHeaderNamePattern = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
 
 const kebabIdentifierSchema = z
   .string()
@@ -72,6 +73,18 @@ const repositoryReferenceSchema = z
 const secretNameSchema = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u, 'must be a stable secret name');
+export const httpHeaderNameSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(httpHeaderNamePattern, 'must be an RFC token-compatible HTTP header name');
+export const httpHeaderValuePrefixSchema = z
+  .string()
+  .max(100)
+  .regex(
+    /^(?!.*\$\{)[\x20-\x7e]*$/u,
+    'must be a printable ASCII literal without variable interpolation',
+  );
 
 const providerPrerequisiteSchema = z.strictObject({
   id: kebabIdentifierSchema,
@@ -118,12 +131,28 @@ export const capabilityArtifactSchema = z.strictObject({
   reference: repositoryReferenceSchema,
 });
 
+export const capabilityHttpHeaderMappingSchema = z.strictObject({
+  name: httpHeaderNameSchema,
+  value: z.strictObject({
+    source: z.literal('configuration'),
+    name: secretNameSchema,
+    prefix: httpHeaderValuePrefixSchema.optional(),
+  }),
+});
+
+export const capabilityBindingClientSchema = z.strictObject({
+  http: z.strictObject({
+    headers: z.array(capabilityHttpHeaderMappingSchema).min(1).max(50),
+  }),
+});
+
 export const capabilityBindingSchema = z.strictObject({
   id: kebabIdentifierSchema,
   profileId: kebabIdentifierSchema,
   artifactId: kebabIdentifierSchema,
   interface: z.enum(['stdio', 'http', 'library', 'custom']),
   availability: z.enum(['local', 'remote', 'hybrid']),
+  client: capabilityBindingClientSchema.optional(),
 });
 
 export const capabilityEntrySchema = z.strictObject({
@@ -198,6 +227,8 @@ export type ReadinessSignal = (typeof readinessSignals)[number];
 export type ConformanceCheck = (typeof conformanceChecks)[number];
 export type CapabilityProfileSummary = z.infer<typeof capabilityProfileSummarySchema>;
 export type CapabilityArtifact = z.infer<typeof capabilityArtifactSchema>;
+export type CapabilityHttpHeaderMapping = z.infer<typeof capabilityHttpHeaderMappingSchema>;
+export type CapabilityBindingClient = z.infer<typeof capabilityBindingClientSchema>;
 export type CapabilityBinding = z.infer<typeof capabilityBindingSchema>;
 export type CapabilityEntry = z.infer<typeof capabilityEntrySchema>;
 export type CapabilityRegistry = z.infer<typeof capabilityRegistrySchema>;

@@ -45,8 +45,8 @@ const bindings = reader.listBindings('vision');
 
 The seam exposes identity, version/artifact status, display metadata, routing summary, tool count,
 profiles, bindings, six execution dimensions, permissions, prerequisites, readiness signals,
-mutation effects, and conformance. It does not resolve versions, choose a binding, generate a
-lockfile, create an adapter, or compose an agent.
+mutation effects, optional HTTP client request mappings, and conformance. It does not resolve
+versions, choose a binding, generate a lockfile, create an adapter, or compose an agent.
 
 Dependency direction is one-way: Agent Kit may consume this package; this package does not depend
 on Agent Kit.
@@ -70,6 +70,50 @@ collapsed into one execution location. The package has no Runtime dependency; a 
 regression test keeps this schema vocabulary identical to Runtime's deployment contract while
 preserving independent package builds.
 
+### HTTP client request mappings
+
+Registry schema `1.1.0` adds an optional binding-level HTTP client contract. The schema remains in
+the `schemas/v1/` major-version path because this is a backward-compatible minor addition for
+bindings that do not require request metadata.
+
+An HTTP binding can map a named profile configuration requirement to one or more request headers:
+
+```json
+{
+  "client": {
+    "http": {
+      "headers": [
+        {
+          "name": "Authorization",
+          "value": {
+            "source": "configuration",
+            "name": "access-token",
+            "prefix": "Bearer "
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+The mapping contains the configuration **name**, never its value. Header names use a bounded
+RFC-token-compatible form. Names are unique case-insensitively; declared casing is preserved in
+public and generated output, while normalization orders headers by their lowercase name and then
+their declared name. A prefix is an optional, bounded printable-ASCII literal. It cannot contain
+CR, LF, control characters, or variable interpolation.
+
+Mappings are valid only on `http` interfaces, and every referenced configuration must appear in
+the selected profile's `prerequisites.requiredSecrets`. A remote HTTP binding must map every
+required configuration explicitly. Unauthenticated remote HTTP bindings need no mapping. This
+fail-closed rule prevents a host from guessing `Authorization`, `x-api-key`, `Bearer`, or any other
+transport semantics from a configuration name.
+
+The Registry owns this metadata because a binding joins a profile requirement to a concrete
+transport. Profiles continue to describe what configuration and preparation are required without
+embedding host behavior. Host adapters consume the validated mapping through Agent Kit and may
+accept it only when they can represent it faithfully.
+
 Six entries normalize their authoritative `capability-profiles.json`. AST Summarizer predates that
 declaration, so its local profile is marked `registry-curated` and references its pinned
 server/package/release metadata instead of pretending a source declaration exists.
@@ -86,8 +130,8 @@ npm run registry:validate
 
 Normal validation is deterministic and offline. It rejects unsupported schema versions, duplicate
 identities, malformed versions/artifacts/profiles, invalid profile or artifact references,
-six-dimension mismatches, inconsistent mutation effects, stale generated output, and
-account-specific/private data.
+six-dimension mismatches, incomplete or invalid HTTP client mappings, inconsistent mutation
+effects, stale generated output, and account-specific/private data.
 
 Optional development/CI drift checks receive explicit local checkout paths and do not fetch:
 
@@ -106,5 +150,6 @@ and normalized source profiles. No local paths are written into registry data.
 Registry entries contain reusable product metadata only. Validation rejects account identifiers,
 Azure resource IDs, secret assignments, private keys, local user paths, private IP endpoints,
 localhost, and private/internal hostnames. Secret **names** and generic provider prerequisites are
-allowed; secret values, tenant/subscription/client IDs, private endpoints, and operator desired
-state belong in private Prepare/live state.
+allowed, as are generic header names and safe literal prefixes. Secret values,
+tenant/subscription/client IDs, private endpoints, and operator desired state belong in private
+Prepare/live state.

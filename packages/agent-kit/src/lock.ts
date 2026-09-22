@@ -43,6 +43,18 @@ export const createAgentLock = (
         id: capability.binding.id,
         mode: capability.binding.mode,
         interface: capability.binding.interface,
+        client:
+          capability.binding.httpClient === undefined
+            ? null
+            : {
+                http: {
+                  headers: capability.binding.httpClient.headers.map((header) => ({
+                    name: header.name,
+                    configuration: header.configurationName,
+                    prefix: header.prefix,
+                  })),
+                },
+              },
       },
       artifact: capability.binding.artifact,
       requirements: {

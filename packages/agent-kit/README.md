@@ -93,11 +93,56 @@ build.instanceIdentity; // stable seam for a later environment-specific instance
 ```
 
 The VS Code adapter uses exact package versions for local stdio servers and input placeholders for
-remote endpoints or local secret values. Declared-but-unpublished packages use offline launch mode
-and remain a Prepare requirement. An authenticated remote binding is incompatible until the
-registry contract provides an explicit client-header mapping; Agent Kit does not guess one from a
-secret name. Values, endpoints, credentials, absolute local paths, and live provider identifiers
-never enter `agent.lock`.
+remote endpoints or named configuration. Declared-but-unpublished packages use offline launch mode
+and remain a Prepare requirement.
+
+For remote HTTP bindings, Agent Kit carries the Registry's validated header name, configuration
+name, and safe literal prefix into the resolved execution binding. The VS Code adapter emits one
+ordinary endpoint input and separate password inputs for required authentication configuration:
+
+```json
+{
+  "inputs": [
+    {
+      "id": "example-access-token",
+      "type": "promptString",
+      "description": "Example: access-token",
+      "password": true
+    },
+    {
+      "id": "example-endpoint",
+      "type": "promptString",
+      "description": "Example MCP endpoint"
+    }
+  ],
+  "servers": {
+    "example": {
+      "type": "http",
+      "url": "${input:example-endpoint}",
+      "headers": {
+        "Authorization": "Bearer ${input:example-access-token}"
+      }
+    }
+  }
+}
+```
+
+This shape follows the authoritative
+[VS Code MCP configuration reference](https://code.visualstudio.com/docs/agents/reference/mcp-configuration):
+remote servers use `type`, `url`, and string-valued `headers`, and `promptString` inputs support
+substring substitution. Agent Kit uses only the Registry's literal prefix; it does not implement
+templates, transforms, encoding, or inferred authentication schemes.
+
+Authenticated remote HTTP is host-compatible only when the Registry mapping is complete and the
+adapter can express it faithfully. Missing or unsupported transport semantics remain incompatible.
+Unauthenticated remote HTTP remains compatible, and local/hybrid stdio configuration continues to
+use environment-variable input references.
+
+Lock schema `2` persists the selected client mapping under the binding using only the header name,
+configuration name, and literal prefix. Registry entry digests also cover the complete source
+mapping. VS Code adapter schema `2` identifies the new compatibility and generated-header
+semantics. Configuration values, endpoint values, credentials, absolute local paths, and live
+provider identifiers never enter `agent.lock` or generated files.
 
 ## Readiness
 
@@ -108,6 +153,11 @@ Readiness is a plan, not a liveness probe. It distinguishes:
 - remote or provider setup still required;
 - missing named configuration;
 - incompatible bindings.
+
+Compatibility answers whether a host can represent the selected binding. Readiness separately
+answers whether its named configuration, remote connection, local artifact, and provider
+prerequisites have been prepared. Generating an authenticated HTTP server therefore makes the
+binding compatible but does not mark a missing token, endpoint, or provider prerequisite ready.
 
 An installed local binding can be ready while its process is inactive. Runtime and provider health
 remain later Prepare/management concerns.

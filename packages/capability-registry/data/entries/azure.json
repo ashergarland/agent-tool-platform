@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.1.0",
   "kind": "capability",
   "id": "azure",
   "displayName": "Azure Agent Tool Server",
@@ -116,14 +116,42 @@
       "profileId": "hosted-mutating",
       "artifactId": "oci-container",
       "interface": "http",
-      "availability": "remote"
+      "availability": "remote",
+      "client": {
+        "http": {
+          "headers": [
+            {
+              "name": "x-api-key",
+              "value": {
+                "source": "configuration",
+                "name": "connector-api-key",
+                "prefix": ""
+              }
+            }
+          ]
+        }
+      }
     },
     {
       "id": "hosted-read-only-http",
       "profileId": "hosted-read-only",
       "artifactId": "oci-container",
       "interface": "http",
-      "availability": "remote"
+      "availability": "remote",
+      "client": {
+        "http": {
+          "headers": [
+            {
+              "name": "x-api-key",
+              "value": {
+                "source": "configuration",
+                "name": "connector-api-key",
+                "prefix": ""
+              }
+            }
+          ]
+        }
+      }
     }
   ],
   "stateChanging": true,

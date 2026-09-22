@@ -1,9 +1,13 @@
 import { z } from 'zod';
-import { capabilityRegistrySchemaVersion } from '@agent-tool-platform/capability-registry';
+import {
+  capabilityRegistrySchemaVersion,
+  httpHeaderNameSchema,
+  httpHeaderValuePrefixSchema,
+} from '@agent-tool-platform/capability-registry';
 import { deploymentProfileDimensionsSchema } from '@agent-tool-platform/runtime';
 
 export const AGENT_DEFINITION_SCHEMA_VERSION = 1;
-export const AGENT_LOCK_SCHEMA_VERSION = 1;
+export const AGENT_LOCK_SCHEMA_VERSION = 2;
 export const AGENT_BUILD_SCHEMA_VERSION = 1;
 export const AGENT_INSTANCE_SEAM_SCHEMA_VERSION = 1;
 
@@ -235,6 +239,22 @@ const lockCapabilitySchema = z.strictObject({
     id: profileIdentifierSchema,
     mode: z.enum(['local', 'remote', 'hybrid']),
     interface: z.enum(['stdio', 'http', 'library', 'custom']),
+    client: z
+      .strictObject({
+        http: z.strictObject({
+          headers: z
+            .array(
+              z.strictObject({
+                name: httpHeaderNameSchema,
+                configuration: secretNameSchema,
+                prefix: httpHeaderValuePrefixSchema,
+              }),
+            )
+            .min(1)
+            .max(50),
+        }),
+      })
+      .nullable(),
   }),
   artifact: resolvedCapabilityArtifactSchema,
   requirements: z.strictObject({

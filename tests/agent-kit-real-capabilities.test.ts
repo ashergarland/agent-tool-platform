@@ -22,6 +22,24 @@ const acceptanceDefinition = {
   capabilities: [{ id: 'git-optimizer' }, { id: 'ast-summarizer' }, { id: 'data-cruncher' }],
 };
 
+const m6Definition = {
+  schemaVersion: 1,
+  id: 'developer-optimization',
+  name: 'Developer Optimization Agent',
+  version: '1.0.0',
+  instructions:
+    'Optimize developer workflows with compact, evidence-backed output from the selected capabilities.',
+  capabilities: [
+    { id: 'ast-summarizer' },
+    { id: 'git-optimizer' },
+    { id: 'data-cruncher' },
+    { id: 'doc-rag' },
+    { id: 'vision' },
+    { id: 'document-optimizer' },
+    { id: 'azure' },
+  ],
+};
+
 const loadFirstPartyRegistry = async () => {
   const document = await loadFirstPartyCapabilityRegistry();
   return {
@@ -230,7 +248,7 @@ describe('real first-party capability proofs', () => {
       ),
     ).toEqual({
       'ast-summarizer': 'local-package:local',
-      azure: 'incompatible',
+      azure: 'hosted-read-only:remote',
       'data-cruncher': 'local-package:local',
       'doc-rag': 'local-filesystem-package:local',
       'document-optimizer': 'local-filesystem-package:local',
@@ -239,7 +257,119 @@ describe('real first-party capability proofs', () => {
     });
   });
 
-  it('selects Vision hybrid and safely rejects Azure remote auth without header metadata', async () => {
+  it('builds the exact M6 seven-capability VS Code composition', async () => {
+    const { reader } = await loadFirstPartyRegistry();
+    const build = await buildVsCodeAgent(m6Definition, { registry: reader });
+    const azure = build.capabilities.find((capability) => capability.capability.id === 'azure');
+    const vision = build.capabilities.find((capability) => capability.capability.id === 'vision');
+
+    expect(azure).toMatchObject({
+      status: 'resolved',
+      profile: { id: 'hosted-read-only' },
+      binding: {
+        id: 'hosted-read-only-http',
+        mode: 'remote',
+        interface: 'http',
+        httpClient: {
+          headers: [
+            {
+              name: 'x-api-key',
+              configurationName: 'connector-api-key',
+              prefix: '',
+            },
+          ],
+        },
+      },
+      compatibility: { state: 'compatible', reasons: [] },
+    });
+    expect(vision).toMatchObject({
+      status: 'resolved',
+      profile: { id: 'local-package' },
+      binding: { id: 'local-stdio', mode: 'local', interface: 'stdio' },
+    });
+
+    const mcpText = build.adapter.files.find((file) => file.path === '.vscode/mcp.json')!.content;
+    const mcp = JSON.parse(mcpText) as {
+      readonly inputs: readonly {
+        readonly id: string;
+        readonly type: string;
+        readonly password?: boolean;
+      }[];
+      readonly servers: Readonly<
+        Record<
+          string,
+          {
+            readonly type: string;
+            readonly url?: string;
+            readonly headers?: Readonly<Record<string, string>>;
+          }
+        >
+      >;
+    };
+    expect(Object.keys(mcp.servers)).toHaveLength(7);
+    expect(Object.values(mcp.servers).filter((server) => server.type === 'stdio')).toHaveLength(6);
+    expect(mcp.servers.azure).toEqual({
+      type: 'http',
+      url: '${input:azure-endpoint}',
+      headers: {
+        'x-api-key': '${input:azure-connector-api-key}',
+      },
+    });
+    expect(mcp.inputs).toEqual([
+      expect.objectContaining({
+        id: 'azure-connector-api-key',
+        type: 'promptString',
+        password: true,
+      }),
+      expect.objectContaining({
+        id: 'azure-endpoint',
+        type: 'promptString',
+      }),
+    ]);
+    expect(mcpText).not.toContain('synthetic-secret-value');
+    expect(mcpText).not.toMatch(/https?:\/\//u);
+    expect(mcpText).not.toMatch(/\/subscriptions\/|tenant[-_ ]?id|subscription[-_ ]?id/iu);
+    expect(mcpText).not.toMatch(
+      /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/iu,
+    );
+
+    const azureReadiness = build.readiness.capabilities.find(
+      (capability) => capability.id === 'azure',
+    );
+    expect(azureReadiness?.state).toBe('missing-configuration');
+    expect(azureReadiness?.requirements).toEqual(
+      expect.arrayContaining([
+        { kind: 'configuration', state: 'missing', name: 'connector-api-key' },
+        { kind: 'remote-connection', state: 'setup-required' },
+        expect.objectContaining({
+          kind: 'provider-prerequisite',
+          state: 'setup-required',
+          id: 'azure-provider-registrations',
+        }),
+        expect.objectContaining({
+          kind: 'provider-prerequisite',
+          state: 'setup-required',
+          id: 'azure-resource-manager',
+        }),
+      ]),
+    );
+    expect(build.lockText).not.toContain('synthetic-secret-value');
+    expect(
+      build.lock.capabilities.find((capability) => capability.id === 'azure')?.binding.client,
+    ).toEqual({
+      http: {
+        headers: [
+          {
+            name: 'x-api-key',
+            configuration: 'connector-api-key',
+            prefix: '',
+          },
+        ],
+      },
+    });
+  });
+
+  it('honors explicit Vision hybrid and Azure mutating selections generically', async () => {
     const definition = {
       ...acceptanceDefinition,
       capabilities: [
@@ -263,27 +393,34 @@ describe('real first-party capability proofs', () => {
       mutation: 'mutating',
     });
     expect(vision?.status === 'resolved' ? vision.binding.mode : undefined).toBe('hybrid');
-    expect(azure?.status).toBe('incompatible');
+    expect(azure?.status).toBe('resolved');
     expect(azure?.profile.dimensions).toMatchObject({
       execution: 'hosted',
       provider: 'external',
       mutation: 'mutating',
     });
-    expect(azure?.status === 'incompatible' ? azure.registryBinding.availability : undefined).toBe(
-      'remote',
-    );
-    expect(azure?.compatibility.reasons).toContain(
-      'authenticated HTTP bindings require a registry-defined client header mapping that is not available',
-    );
+    expect(azure?.status === 'resolved' ? azure.binding.mode : undefined).toBe('remote');
+    expect(azure?.status === 'resolved' ? azure.binding.httpClient : undefined).toEqual({
+      headers: [
+        {
+          name: 'x-api-key',
+          configurationName: 'connector-api-key',
+          prefix: '',
+        },
+      ],
+    });
 
     const readiness = createReadinessPlan(resolution);
     expect(readiness.capabilities.map((capability) => capability.state)).toEqual([
-      'incompatible-binding',
+      'missing-configuration',
       'missing-configuration',
     ]);
 
-    await expect(buildVsCodeAgent(definition, { registry: reader })).rejects.toMatchObject({
-      code: 'INCOMPATIBLE_BINDING',
+    await expect(buildVsCodeAgent(definition, { registry: reader })).resolves.toMatchObject({
+      capabilities: [
+        expect.objectContaining({ status: 'resolved' }),
+        expect.objectContaining({ status: 'resolved' }),
+      ],
     });
   });
 });

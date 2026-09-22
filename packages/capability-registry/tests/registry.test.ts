@@ -18,12 +18,14 @@ import {
   capabilityEntryJsonSchema,
   capabilityRegistryJsonSchema,
   checkFirstPartyRegistry,
+  capabilityRegistrySchemaVersion,
   createCapabilityRegistryReader,
   deliveryDimensions,
   executionDimensions,
   generateFirstPartyRegistry,
   loadFirstPartyCapabilityRegistry,
   mutationDimensions,
+  normalizeCapabilityEntry,
   providerDimensions,
   serializeCapabilityRegistry,
   validateAccountNeutrality,
@@ -93,10 +95,15 @@ describe('capability registry JSON Schemas', () => {
 
     expect(entrySchema.safeParse(registry.capabilities[0]).success).toBe(true);
     expect(registrySchema.safeParse(registry).success).toBe(true);
+    expect(capabilityRegistrySchemaVersion).toBe('1.1.0');
 
     const entry = clone(registry.capabilities[0]!);
+    const priorEntry = { ...entry, schemaVersion: '1.0.0' };
+    const priorRegistry = { ...registry, schemaVersion: '1.0.0' };
     const unsupportedEntry = { ...entry, schemaVersion: '2.0.0' };
     const unsupportedRegistry = { ...registry, schemaVersion: '2.0.0' };
+    expect(entrySchema.safeParse(priorEntry).success).toBe(false);
+    expect(registrySchema.safeParse(priorRegistry).success).toBe(false);
     expect(entrySchema.safeParse(unsupportedEntry).success).toBe(false);
     expect(registrySchema.safeParse(unsupportedRegistry).success).toBe(false);
   });
@@ -139,6 +146,30 @@ describe('first-party registry', () => {
         expect(Object.keys(profile.dimensions).sort()).toEqual(dimensionKeys);
       }
     }
+
+    const azure = registry.capabilities.find((entry) => entry.id === 'azure');
+    expect(azure?.bindings.map((binding) => binding.client?.http.headers)).toEqual([
+      [
+        {
+          name: 'x-api-key',
+          value: {
+            source: 'configuration',
+            name: 'connector-api-key',
+            prefix: '',
+          },
+        },
+      ],
+      [
+        {
+          name: 'x-api-key',
+          value: {
+            source: 'configuration',
+            name: 'connector-api-key',
+            prefix: '',
+          },
+        },
+      ],
+    ]);
   });
 
   it('generates byte-for-byte deterministic sorted output', async () => {
@@ -158,6 +189,34 @@ describe('first-party registry', () => {
         [...entry.bindings.map((binding) => binding.id)].sort(),
       );
     }
+  });
+
+  it('orders HTTP headers case-insensitively while preserving declared casing', async () => {
+    const registry = await loadFirstPartyCapabilityRegistry();
+    const azure = clone(registry.capabilities.find((entry) => entry.id === 'azure')!);
+    const binding = azure.bindings.find((item) => item.id === 'hosted-read-only-http')!;
+    binding.client!.http.headers = [
+      {
+        name: 'Z-Trace',
+        value: { source: 'configuration', name: 'connector-api-key', prefix: '' },
+      },
+      ...binding.client!.http.headers,
+      {
+        name: 'Authorization',
+        value: {
+          source: 'configuration',
+          name: 'connector-api-key',
+          prefix: 'Bearer ',
+        },
+      },
+    ];
+
+    const normalized = normalizeCapabilityEntry(azure);
+    expect(
+      normalized.bindings
+        .find((item) => item.id === 'hosted-read-only-http')
+        ?.client?.http.headers.map((header) => header.name),
+    ).toEqual(['Authorization', 'x-api-key', 'Z-Trace']);
   });
 });
 
@@ -210,6 +269,125 @@ describe('registry semantic validation', () => {
         expect.stringContaining('references unknown artifact'),
       ]),
     );
+  });
+
+  it('rejects authenticated remote HTTP bindings without a complete client mapping', async () => {
+    const registry = await loadFirstPartyCapabilityRegistry();
+    const azure = clone(registry.capabilities.find((entry) => entry.id === 'azure')!);
+    const binding = azure.bindings.find((item) => item.id === 'hosted-read-only-http')!;
+    delete binding.client;
+
+    const missing = validateCapabilityEntryDocument(azure);
+    expect(missing.valid).toBe(false);
+    expect(missing.errors.join('\n')).toContain(
+      'has no HTTP client mapping for required configuration connector-api-key',
+    );
+
+    const incomplete = clone(registry.capabilities.find((entry) => entry.id === 'azure')!);
+    incomplete.profiles
+      .find((profile) => profile.id === 'hosted-read-only')!
+      .prerequisites.requiredSecrets.push('second-secret');
+    expect(validateCapabilityEntryDocument(incomplete).errors.join('\n')).toContain(
+      'has no HTTP client mapping for required configuration second-secret',
+    );
+  });
+
+  it('rejects mappings to undeclared configuration', async () => {
+    const registry = await loadFirstPartyCapabilityRegistry();
+    const azure = clone(registry.capabilities.find((entry) => entry.id === 'azure')!);
+    const header = azure.bindings.find((item) => item.id === 'hosted-read-only-http')!.client!.http
+      .headers[0]!;
+    header.value.name = 'invented-secret';
+
+    expect(validateCapabilityEntryDocument(azure).errors.join('\n')).toContain(
+      'references undeclared configuration invented-secret',
+    );
+  });
+
+  it('rejects duplicate HTTP header names case-insensitively', async () => {
+    const registry = await loadFirstPartyCapabilityRegistry();
+    const azure = clone(registry.capabilities.find((entry) => entry.id === 'azure')!);
+    const headers = azure.bindings.find((item) => item.id === 'hosted-read-only-http')!.client!.http
+      .headers;
+    headers.push({
+      name: 'X-API-Key',
+      value: { source: 'configuration', name: 'connector-api-key', prefix: '' },
+    });
+
+    expect(validateCapabilityEntryDocument(azure).errors.join('\n')).toContain(
+      'duplicate hosted-read-only-http HTTP client header name (case-insensitive): x-api-key',
+    );
+  });
+
+  it.each(['', 'bad header', 'bad:header', 'bad\rheader', 'bad\nheader', 'bad(header)'])(
+    'rejects invalid HTTP header name %j',
+    async (name) => {
+      const registry = await loadFirstPartyCapabilityRegistry();
+      const azure = clone(registry.capabilities.find((entry) => entry.id === 'azure')!);
+      azure.bindings.find(
+        (item) => item.id === 'hosted-read-only-http',
+      )!.client!.http.headers[0]!.name = name;
+
+      const errors = validateCapabilityEntryDocument(azure).errors.join('\n');
+      expect(errors).toMatch(/HTTP header name|Too small/u);
+    },
+  );
+
+  it.each(['Bearer\r', 'Bearer\n', '${input:other}', 'x'.repeat(101)])(
+    'rejects unsafe HTTP header prefix %j',
+    async (prefix) => {
+      const registry = await loadFirstPartyCapabilityRegistry();
+      const azure = clone(registry.capabilities.find((entry) => entry.id === 'azure')!);
+      azure.bindings.find(
+        (item) => item.id === 'hosted-read-only-http',
+      )!.client!.http.headers[0]!.value.prefix = prefix;
+
+      expect(validateCapabilityEntryDocument(azure).valid).toBe(false);
+    },
+  );
+
+  it.each(['stdio', 'library', 'custom'] as const)(
+    'rejects HTTP client mappings on the %s interface',
+    async (bindingInterface) => {
+      const registry = await loadFirstPartyCapabilityRegistry();
+      const ast = clone(registry.capabilities.find((entry) => entry.id === 'ast-summarizer')!);
+      ast.bindings[0]!.interface = bindingInterface;
+      ast.bindings[0]!.client = {
+        http: {
+          headers: [
+            {
+              name: 'Authorization',
+              value: { source: 'configuration', name: 'access-token', prefix: 'Bearer ' },
+            },
+          ],
+        },
+      };
+
+      expect(validateCapabilityEntryDocument(ast).errors.join('\n')).toContain(
+        'HTTP client mapping requires the http interface',
+      );
+    },
+  );
+
+  it('does not admit a secret value field into the client mapping contract', async () => {
+    const registry = await loadFirstPartyCapabilityRegistry();
+    const azure = clone(registry.capabilities.find((entry) => entry.id === 'azure')!);
+    const value = azure.bindings.find((item) => item.id === 'hosted-read-only-http')!.client!.http
+      .headers[0]!.value;
+    Object.assign(value, { secretValue: 'must-not-enter-registry' });
+
+    const errors = validateCapabilityEntryDocument(azure).errors.join('\n');
+    expect(errors).toContain('Unrecognized key');
+    expect(errors).toContain('secretValue');
+  });
+
+  it('accepts an unauthenticated remote HTTP binding without a client mapping', async () => {
+    const registry = await loadFirstPartyCapabilityRegistry();
+    const azure = clone(registry.capabilities.find((entry) => entry.id === 'azure')!);
+    for (const profile of azure.profiles) profile.prerequisites.requiredSecrets = [];
+    for (const binding of azure.bindings) delete binding.client;
+
+    expect(validateCapabilityEntryDocument(azure)).toEqual({ valid: true, errors: [] });
   });
 
   it('rejects invalid capability versions and artifact references', async () => {
@@ -271,6 +449,19 @@ describe('registry semantic validation', () => {
     entry.routing.summary = value;
     expect(validateAccountNeutrality([entry]).join('\n')).not.toBe('');
     expect(validateCapabilityEntryDocument(entry).valid).toBe(false);
+  });
+
+  it('applies account-neutrality validation to HTTP header prefixes', async () => {
+    const registry = await loadFirstPartyCapabilityRegistry();
+    const azure = clone(registry.capabilities.find((entry) => entry.id === 'azure')!);
+    azure.bindings.find(
+      (item) => item.id === 'hosted-read-only-http',
+    )!.client!.http.headers[0]!.value.prefix = 'token=do-not-store-this';
+
+    expect(validateAccountNeutrality([azure]).join('\n')).toContain(
+      'private secret value assignment',
+    );
+    expect(validateCapabilityEntryDocument(azure).valid).toBe(false);
   });
 
   it.each([

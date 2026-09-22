@@ -16,6 +16,25 @@ const sorted = <T>(values: readonly T[], key: (value: T) => string): T[] =>
 const sortedStrings = <T extends string>(values: readonly T[]): T[] =>
   [...values].sort((left, right) => left.localeCompare(right));
 
+const compareCodeUnits = (left: string, right: string): number =>
+  left < right ? -1 : left > right ? 1 : 0;
+
+const normalizeBinding = (binding: CapabilityBinding): CapabilityBinding => {
+  if (binding.client === undefined) return binding;
+  return {
+    ...binding,
+    client: {
+      http: {
+        headers: [...binding.client.http.headers].sort(
+          (left, right) =>
+            compareCodeUnits(left.name.toLowerCase(), right.name.toLowerCase()) ||
+            compareCodeUnits(left.name, right.name),
+        ),
+      },
+    },
+  };
+};
+
 export const normalizeCapabilityEntry = (entry: CapabilityEntry): CapabilityEntry => ({
   ...entry,
   artifacts: sorted(entry.artifacts, (artifact) => artifact.id),
@@ -37,7 +56,7 @@ export const normalizeCapabilityEntry = (entry: CapabilityEntry): CapabilityEntr
     },
     stateEffects: sortedStrings(profile.stateEffects),
   })),
-  bindings: sorted(entry.bindings, (binding) => binding.id),
+  bindings: sorted(entry.bindings, (binding) => binding.id).map(normalizeBinding),
   conformance: {
     ...entry.conformance,
     checks: sortedStrings(entry.conformance.checks),
