@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createCapabilityRegistryReader,
   loadFirstPartyCapabilityRegistry,
@@ -6,10 +6,15 @@ import {
 import {
   buildVsCodeAgent,
   capabilityBindingKey,
+  createPreparationPlan,
   createReadinessPlan,
   parseRegistryCapability,
+  prepareAgent,
   resolveAgentDefinition,
+  serializePreparedAgentInstance,
   vscodeHostAdapter,
+  type PreparationDriver,
+  type PreparationDriverRequest,
 } from '@agent-tool-platform/agent-kit';
 
 const acceptanceDefinition = {
@@ -367,6 +372,104 @@ describe('real first-party capability proofs', () => {
         ],
       },
     });
+  });
+
+  it('prepares the seven-capability Developer Optimization shape without live provider calls', async () => {
+    const { reader } = await loadFirstPartyRegistry();
+    const build = await buildVsCodeAgent(m6Definition, { registry: reader });
+    const localBindings = build.capabilities.filter(
+      (capability) => capability.binding.mode === 'local',
+    );
+    const remoteBindings = build.capabilities.filter(
+      (capability) => capability.binding.mode === 'remote',
+    );
+    const azure = remoteBindings[0]!;
+    const readinessSnapshot = {
+      schemaVersion: 1 as const,
+      availableLocalBindings: localBindings.map((capability) => capability.binding.key),
+      availableRemoteBindings: [azure.binding.key],
+      availableProviderPrerequisites: azure.binding.providerPrerequisites.map(
+        (prerequisite) => `${azure.binding.key}/${prerequisite.id}`,
+      ),
+      configuration: [
+        {
+          bindingKey: azure.binding.key,
+          availableNames: [...azure.binding.requiredSecretNames],
+        },
+      ],
+    };
+    const plan = createPreparationPlan(build, {
+      environmentId: 'hackathon-workstation',
+      readinessSnapshot,
+    });
+    const execute = vi.fn(async (request: PreparationDriverRequest) => {
+      void request;
+      return { status: 'success' as const };
+    });
+    const driver: PreparationDriver = { execute };
+    const prepared = await prepareAgent(build, {
+      environmentId: 'hackathon-workstation',
+      readinessSnapshot,
+      driver,
+      clock: { now: () => new Date('2026-09-25T04:00:00.000Z') },
+    });
+
+    expect(localBindings).toHaveLength(6);
+    expect(remoteBindings).toHaveLength(1);
+    expect(
+      build.readiness.capabilities.filter((item) => item.state === 'local-setup-required'),
+    ).toHaveLength(6);
+    expect(build.readiness.capabilities.find((item) => item.id === 'azure')?.state).toBe(
+      'missing-configuration',
+    );
+    expect(plan).toEqual(
+      createPreparationPlan(build, {
+        environmentId: 'hackathon-workstation',
+        readinessSnapshot,
+      }),
+    );
+    expect(plan.actions.filter((action) => action.kind === 'verify-local-artifact')).toHaveLength(
+      6,
+    );
+    expect(plan.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'verify-configuration',
+          configurationName: 'connector-api-key',
+        }),
+        expect.objectContaining({ kind: 'verify-remote-connection' }),
+        expect.objectContaining({
+          kind: 'verify-provider-prerequisite',
+          prerequisiteId: 'azure-provider-registrations',
+        }),
+        expect.objectContaining({
+          kind: 'verify-provider-prerequisite',
+          prerequisiteId: 'azure-resource-manager',
+        }),
+        expect.objectContaining({ kind: 'prepare-host-integration' }),
+      ]),
+    );
+    expect(prepared.plan).toEqual(plan);
+    expect(prepared.instance.state).toBe('READY');
+    expect(prepared.instance.state).not.toBe('ACTIVE');
+    expect(prepared.instance.bindings).toHaveLength(7);
+    expect(prepared.instance.bindings.filter((binding) => binding.mode === 'local')).toHaveLength(
+      6,
+    );
+    expect(prepared.instance.bindings.filter((binding) => binding.mode === 'remote')).toHaveLength(
+      1,
+    );
+    expect(
+      prepared.readiness.capabilities.every(
+        (item) => item.state === 'ready' || item.state === 'available-local',
+      ),
+    ).toBe(true);
+    expect(prepared.runnable).toBe(true);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.[0].action.kind).toBe('prepare-host-integration');
+    expect(serializePreparedAgentInstance(prepared.instance)).not.toContain(
+      'synthetic-secret-value',
+    );
   });
 
   it('honors explicit Vision hybrid and Azure mutating selections generically', async () => {

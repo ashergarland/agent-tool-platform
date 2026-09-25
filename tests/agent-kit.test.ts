@@ -9,15 +9,24 @@ import {
 import {
   AgentKitError,
   MAX_AGENT_KIT_ERROR_LENGTH,
+  PREPARATION_SCHEMA_VERSION,
+  PREPARED_AGENT_INSTANCE_SCHEMA_VERSION,
   buildVsCodeAgent,
   capabilityBindingKey,
+  createPreparationPlan,
   createPreparedAgentInstanceIdentity,
   createReadinessPlan,
+  parsePreparedAgentInstance,
   parseAgentDefinition,
+  prepareAgent,
   resolveAgentDefinition,
   resolveRegistryCapability,
   serializeAgentLock,
+  serializePreparedAgentInstance,
   vscodeHostAdapter,
+  type AgentBuild,
+  type PreparationDriver,
+  type ReadinessSnapshot,
 } from '@agent-tool-platform/agent-kit';
 
 type ProfileKind = 'hybrid' | 'incompatible-source' | 'local' | 'remote';
@@ -603,6 +612,507 @@ describe('deterministic build outputs', () => {
       args: ['-y', '@agent-tool-platform/ast-summarizer@1.0.0'],
       command: 'npx',
       type: 'stdio',
+    });
+  });
+
+  describe('Prepare and prepared Agent Instances', () => {
+    const environmentId = 'developer-workstation';
+    const fixedClock = {
+      now: () => new Date('2026-09-25T04:00:00.000Z'),
+    };
+
+    const buildComposition = async (): Promise<AgentBuild> => {
+      const capabilities = [
+        entryFor('ast-summarizer', 'AST Summarizer'),
+        entryFor('vision', 'Vision', 'hybrid'),
+        entryFor('azure', 'Azure', 'remote'),
+      ];
+      return buildVsCodeAgent(
+        definition(capabilities.map((capability) => ({ id: capability.id }))),
+        { registry: new FixtureRegistry(capabilities) },
+      );
+    };
+
+    const readySnapshotFor = (build: AgentBuild): ReadinessSnapshot => ({
+      schemaVersion: 1,
+      availableLocalBindings: build.capabilities
+        .filter((capability) => capability.binding.mode !== 'remote')
+        .map((capability) => capability.binding.key),
+      availableRemoteBindings: build.capabilities
+        .filter((capability) => capability.binding.mode === 'remote')
+        .map((capability) => capability.binding.key),
+      availableProviderPrerequisites: build.capabilities.flatMap((capability) =>
+        capability.binding.providerPrerequisites.map(
+          (prerequisite) => `${capability.binding.key}/${prerequisite.id}`,
+        ),
+      ),
+      configuration: build.capabilities
+        .filter((capability) => capability.binding.requiredSecretNames.length > 0)
+        .map((capability) => ({
+          bindingKey: capability.binding.key,
+          availableNames: [...capability.binding.requiredSecretNames],
+        })),
+    });
+
+    it('creates a deterministic capability-neutral plan without host file contents', async () => {
+      const build = await buildComposition();
+      const options = {
+        environmentId,
+        readinessSnapshot: { schemaVersion: 1 as const },
+      };
+      const first = createPreparationPlan(build, options);
+      const second = createPreparationPlan(build, options);
+      const text = JSON.stringify(first);
+
+      expect(first).toEqual(second);
+      expect(first.schemaVersion).toBe(PREPARATION_SCHEMA_VERSION);
+      expect(first.instance.instanceId).toBe(
+        createPreparedAgentInstanceIdentity(build.instanceIdentity, environmentId).instanceId,
+      );
+      expect(first.actions.map((action) => action.kind)).toEqual([
+        'make-local-artifact-available',
+        'make-local-artifact-available',
+        'prepare-host-integration',
+        'verify-configuration',
+        'verify-configuration',
+        'verify-provider-prerequisite',
+        'verify-provider-prerequisite',
+        'verify-remote-connection',
+      ]);
+      expect(first.actions.every((action) => action.actionId.startsWith('sha256:'))).toBe(true);
+      expect(text).not.toContain(build.definition.instructions);
+      expect(text).not.toContain(build.adapter.files[0]?.content);
+      expect(text).not.toContain(build.adapter.files[1]?.content);
+    });
+
+    it('produces READY but never ACTIVE when all environment evidence exists', async () => {
+      const build = await buildComposition();
+      const result = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot: readySnapshotFor(build),
+        hostIntegration: 'available',
+        clock: fixedClock,
+      });
+
+      expect(result.instance.schemaVersion).toBe(PREPARED_AGENT_INSTANCE_SCHEMA_VERSION);
+      expect(result.instance.state).toBe('READY');
+      expect(result.instance.state).not.toBe('ACTIVE');
+      expect(result.instance.preparedAt).toBe('2026-09-25T04:00:00.000Z');
+      expect(result.instance.bindings.every((binding) => binding.state === 'READY')).toBe(true);
+      expect(result.runnable).toBe(true);
+      expect(result.setupRequirements).toEqual([]);
+      expect(result.readiness.activityAssessment).toBe('not-evaluated');
+      expect(result.actionResults.every((action) => action.status === 'already-ready')).toBe(true);
+    });
+
+    it('keeps instance identity stable across re-Prepare and updates mutable state', async () => {
+      const build = await buildComposition();
+      const readinessSnapshot = readySnapshotFor(build);
+      const first = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot,
+        hostIntegration: 'available',
+        clock: fixedClock,
+      });
+      const second = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot,
+        hostIntegration: 'available',
+        existingInstance: serializePreparedAgentInstance(first.instance),
+        clock: { now: () => new Date('2026-09-25T05:00:00.000Z') },
+      });
+
+      expect(first.disposition).toBe('created');
+      expect(second.disposition).toBe('updated');
+      expect(second.instance.instanceId).toBe(first.instance.instanceId);
+      expect(second.instance.preparedAt).toBe('2026-09-25T05:00:00.000Z');
+      expect(second.identity).toEqual(first.identity);
+    });
+
+    it('changes identity for a different environment or locked build', async () => {
+      const firstBuild = await buildComposition();
+      const changedCapability = entryFor('ast-summarizer', 'AST Summarizer', 'local', '1.1.0');
+      const changedBuild = await buildVsCodeAgent(definition([{ id: changedCapability.id }]), {
+        registry: new FixtureRegistry([changedCapability]),
+      });
+      const first = await prepareAgent(firstBuild, {
+        environmentId,
+        readinessSnapshot: readySnapshotFor(firstBuild),
+        hostIntegration: 'available',
+        clock: fixedClock,
+      });
+      const otherEnvironment = await prepareAgent(firstBuild, {
+        environmentId: 'ci-environment',
+        readinessSnapshot: readySnapshotFor(firstBuild),
+        hostIntegration: 'available',
+        clock: fixedClock,
+      });
+      const otherBuild = await prepareAgent(changedBuild, {
+        environmentId,
+        readinessSnapshot: readySnapshotFor(changedBuild),
+        hostIntegration: 'available',
+        clock: fixedClock,
+      });
+
+      expect(otherEnvironment.instance.instanceId).not.toBe(first.instance.instanceId);
+      expect(otherBuild.instance.instanceId).not.toBe(first.instance.instanceId);
+    });
+
+    it('keeps a missing local artifact in NEEDS_SETUP, including declared development artifacts', async () => {
+      const capability = entryFor('doc-rag', 'Document RAG', 'local', '0.0.0-development');
+      const build = await buildVsCodeAgent(definition([{ id: capability.id }]), {
+        registry: new FixtureRegistry([capability]),
+      });
+      const result = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot: { schemaVersion: 1 },
+        hostIntegration: 'available',
+        clock: fixedClock,
+      });
+
+      expect(build.capabilities[0]?.binding.artifact.availability).toBe('declared');
+      expect(result.instance.state).toBe('NEEDS_SETUP');
+      expect(result.instance.bindings[0]).toMatchObject({
+        state: 'NEEDS_SETUP',
+        readiness: 'local-setup-required',
+      });
+      expect(result.setupRequirements).toEqual([
+        expect.objectContaining({
+          action: expect.objectContaining({ kind: 'make-local-artifact-available' }),
+          status: 'setup-required',
+        }),
+      ]);
+    });
+
+    it('requires named configuration independently from remote connectivity and provider readiness', async () => {
+      const capability = entryFor('azure', 'Azure', 'remote');
+      const build = await buildVsCodeAgent(definition([{ id: capability.id }]), {
+        registry: new FixtureRegistry([capability]),
+      });
+      const key = build.capabilities[0]!.binding.key;
+      const result = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot: {
+          schemaVersion: 1,
+          availableRemoteBindings: [key],
+          availableProviderPrerequisites: [`${key}/provider-access`],
+        },
+        hostIntegration: 'available',
+        clock: fixedClock,
+      });
+
+      expect(result.instance.state).toBe('NEEDS_SETUP');
+      expect(result.readiness.capabilities[0]?.state).toBe('missing-configuration');
+      expect(result.setupRequirements.map((requirement) => requirement.action.kind)).toEqual([
+        'verify-configuration',
+      ]);
+    });
+
+    it('requires a remote connection independently from configuration and provider readiness', async () => {
+      const capability = entryFor('azure', 'Azure', 'remote');
+      const build = await buildVsCodeAgent(definition([{ id: capability.id }]), {
+        registry: new FixtureRegistry([capability]),
+      });
+      const key = build.capabilities[0]!.binding.key;
+      const result = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot: {
+          schemaVersion: 1,
+          availableProviderPrerequisites: [`${key}/provider-access`],
+          configuration: [{ bindingKey: key, availableNames: ['AZURE_TOKEN'] }],
+        },
+        hostIntegration: 'available',
+        clock: fixedClock,
+      });
+
+      expect(result.instance.state).toBe('NEEDS_SETUP');
+      expect(result.readiness.capabilities[0]?.state).toBe('remote-provider-setup-required');
+      expect(result.setupRequirements.map((requirement) => requirement.action.kind)).toEqual([
+        'verify-remote-connection',
+      ]);
+    });
+
+    it('requires provider readiness independently from a reachable remote endpoint', async () => {
+      const capability = entryFor('azure', 'Azure', 'remote');
+      const build = await buildVsCodeAgent(definition([{ id: capability.id }]), {
+        registry: new FixtureRegistry([capability]),
+      });
+      const key = build.capabilities[0]!.binding.key;
+      const result = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot: {
+          schemaVersion: 1,
+          availableRemoteBindings: [key],
+          configuration: [{ bindingKey: key, availableNames: ['AZURE_TOKEN'] }],
+        },
+        hostIntegration: 'available',
+        clock: fixedClock,
+      });
+
+      expect(result.instance.state).toBe('NEEDS_SETUP');
+      expect(result.readiness.capabilities[0]?.state).toBe('remote-provider-setup-required');
+      expect(result.setupRequirements.map((requirement) => requirement.action.kind)).toEqual([
+        'verify-provider-prerequisite',
+      ]);
+    });
+
+    it('represents mixed local and remote partial readiness without treating inactivity as failure', async () => {
+      const build = await buildComposition();
+      const readySnapshot = readySnapshotFor(build);
+      const vision = build.capabilities.find(
+        (capability) => capability.capability.id === 'vision',
+      )!;
+      const snapshot: ReadinessSnapshot = {
+        ...readySnapshot,
+        availableLocalBindings: readySnapshot.availableLocalBindings?.filter(
+          (binding) => binding !== vision.binding.key,
+        ),
+        availableProviderPrerequisites: readySnapshot.availableProviderPrerequisites?.filter(
+          (prerequisite) => !prerequisite.startsWith(`${vision.binding.key}/`),
+        ),
+        configuration: readySnapshot.configuration?.filter(
+          (entry) => entry.bindingKey !== vision.binding.key,
+        ),
+      };
+      const result = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot: snapshot,
+        hostIntegration: 'available',
+        clock: fixedClock,
+      });
+      const states = Object.fromEntries(
+        result.instance.bindings.map((binding) => [binding.capabilityId, binding.state]),
+      );
+
+      expect(states).toEqual({
+        'ast-summarizer': 'READY',
+        azure: 'READY',
+        vision: 'NEEDS_SETUP',
+      });
+      expect(result.instance.state).toBe('NEEDS_SETUP');
+      expect(result.readiness.activityAssessment).toBe('not-evaluated');
+    });
+
+    it('reconciles successful bounded driver actions through the existing readiness engine', async () => {
+      const build = await buildComposition();
+      const execute = vi.fn(async () => ({ status: 'success' as const }));
+      const driver: PreparationDriver = { execute };
+      const result = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot: { schemaVersion: 1 },
+        driver,
+        clock: fixedClock,
+      });
+
+      expect(execute).toHaveBeenCalledTimes(result.plan.actions.length);
+      expect(result.actionResults.every((action) => action.status === 'success')).toBe(true);
+      expect(result.hostIntegration.status).toBe('success');
+      expect(result.readiness.capabilities.map((capability) => capability.state)).toEqual([
+        'available-local',
+        'ready',
+        'ready',
+      ]);
+      expect(result.instance.state).toBe('READY');
+      expect(result.runnable).toBe(true);
+    });
+
+    it('uses UNAVAILABLE only when the driver reports concrete unavailable evidence', async () => {
+      const build = await buildComposition();
+      const driver: PreparationDriver = {
+        execute: vi.fn(async ({ action }) => ({
+          status:
+            action.kind === 'verify-remote-connection'
+              ? ('unavailable' as const)
+              : ('success' as const),
+        })),
+      };
+      const result = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot: { schemaVersion: 1 },
+        driver,
+        clock: fixedClock,
+      });
+      const azure = result.instance.bindings.find((binding) => binding.capabilityId === 'azure');
+
+      expect(azure?.state).toBe('UNAVAILABLE');
+      expect(result.instance.state).toBe('UNAVAILABLE');
+      expect(result.runnable).toBe(false);
+    });
+
+    it('reports host integration setup and unavailability without regenerating the adapter', async () => {
+      const build = await buildComposition();
+      const readinessSnapshot = readySnapshotFor(build);
+      const setup = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot,
+        clock: fixedClock,
+      });
+      const unavailable = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot,
+        hostIntegration: 'unavailable',
+        clock: fixedClock,
+      });
+
+      expect(setup.hostIntegration.status).toBe('setup-required');
+      expect(setup.instance.state).toBe('NEEDS_SETUP');
+      expect(unavailable.hostIntegration.status).toBe('unavailable');
+      expect(unavailable.instance.state).toBe('UNAVAILABLE');
+      expect(
+        setup.plan.actions.find((action) => action.kind === 'prepare-host-integration'),
+      ).toMatchObject({
+        host: {
+          id: build.adapter.hostId,
+          adapterSchemaVersion: build.adapter.schemaVersion,
+        },
+        files: build.adapter.files.map((file) => ({ path: file.path })),
+      });
+    });
+
+    it('never persists secret values, endpoint values, prompts, or host file contents', async () => {
+      const secret = 'synthetic-secret-value';
+      const privateEndpoint = 'https://private.example.invalid/mcp';
+      const build = await buildComposition();
+      const driver: PreparationDriver = {
+        execute: vi.fn(async () => {
+          void secret;
+          void privateEndpoint;
+          return { status: 'success' as const };
+        }),
+      };
+      const result = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot: { schemaVersion: 1 },
+        driver,
+        clock: fixedClock,
+      });
+      const serialized = serializePreparedAgentInstance(result.instance);
+
+      expect(serialized).not.toContain(secret);
+      expect(serialized).not.toContain(privateEndpoint);
+      expect(serialized).not.toContain(build.definition.instructions);
+      expect(serialized).not.toContain(build.adapter.files[0]?.content);
+      expect(serialized).not.toContain(build.adapter.files[1]?.content);
+      expect(serialized).not.toMatch(/[A-Za-z]:\\/u);
+    });
+
+    it('rejects extra driver payloads before they can enter supported state', async () => {
+      const secret = 'synthetic-secret-value';
+      const build = await buildComposition();
+      const unsafeDriver: PreparationDriver = {
+        execute: vi.fn(async () => ({ status: 'success' as const, secret })),
+      };
+      const error = await expectAgentKitError(
+        () =>
+          prepareAgent(build, {
+            environmentId,
+            readinessSnapshot: { schemaVersion: 1 },
+            driver: unsafeDriver,
+            clock: fixedClock,
+          }),
+        'INVALID_PREPARATION_RESULT',
+      );
+
+      expect(error.message).not.toContain(secret);
+    });
+
+    it('round-trips deterministic serialization and rejects malformed instance data', async () => {
+      const build = await buildComposition();
+      const result = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot: readySnapshotFor(build),
+        hostIntegration: 'available',
+        clock: fixedClock,
+      });
+      const serialized = serializePreparedAgentInstance(result.instance);
+
+      expect(parsePreparedAgentInstance(serialized)).toEqual(result.instance);
+      expect(serializePreparedAgentInstance(parsePreparedAgentInstance(serialized))).toBe(
+        serialized,
+      );
+      expect(() =>
+        parsePreparedAgentInstance({
+          ...result.instance,
+          instanceId: `sha256:${'0'.repeat(64)}`,
+        }),
+      ).toThrow(/canonical build, host, and environment identity/u);
+      expect(() =>
+        parsePreparedAgentInstance({ ...result.instance, secretValue: 'not-allowed' }),
+      ).toThrow(/unrecognized key/iu);
+      expect(() => parsePreparedAgentInstance({ ...result.instance, schemaVersion: 2 })).toThrow(
+        /schemaVersion/u,
+      );
+      expect(() => parsePreparedAgentInstance('{')).toThrow(/JSON is invalid/u);
+    });
+
+    it('fails closed on inconsistent build material and cross-build updates', async () => {
+      const build = await buildComposition();
+      const mutated = structuredClone(build);
+      Object.assign(mutated, { lockDigest: `sha256:${'0'.repeat(64)}` });
+      await expectAgentKitError(
+        () =>
+          prepareAgent(mutated, {
+            environmentId,
+            readinessSnapshot: readySnapshotFor(build),
+            hostIntegration: 'available',
+            clock: fixedClock,
+          }),
+        'INVALID_PREPARATION_INPUT',
+      );
+
+      const mutatedInstructions = structuredClone(build);
+      Object.assign(mutatedInstructions.instructions, { rendered: 'Different instructions' });
+      await expectAgentKitError(
+        () =>
+          prepareAgent(mutatedInstructions, {
+            environmentId,
+            readinessSnapshot: readySnapshotFor(build),
+            hostIntegration: 'available',
+            clock: fixedClock,
+          }),
+        'INVALID_PREPARATION_INPUT',
+      );
+
+      const first = await prepareAgent(build, {
+        environmentId,
+        readinessSnapshot: readySnapshotFor(build),
+        hostIntegration: 'available',
+        clock: fixedClock,
+      });
+      await expectAgentKitError(
+        () =>
+          prepareAgent(build, {
+            environmentId: 'other-environment',
+            readinessSnapshot: readySnapshotFor(build),
+            hostIntegration: 'available',
+            existingInstance: first.instance,
+            clock: fixedClock,
+          }),
+        'INVALID_PREPARATION_INPUT',
+      );
+    });
+
+    it('bounds unexpected driver failures without copying private payloads', async () => {
+      const secret = 'synthetic-secret-value';
+      const build = await buildComposition();
+      const driver: PreparationDriver = {
+        execute: vi.fn(async () => {
+          throw new AgentKitError('PREPARATION_FAILED', secret);
+        }),
+      };
+      const error = await expectAgentKitError(
+        () =>
+          prepareAgent(build, {
+            environmentId,
+            readinessSnapshot: { schemaVersion: 1 },
+            driver,
+            clock: fixedClock,
+          }),
+        'PREPARATION_FAILED',
+      );
+
+      expect(error.message).not.toContain(secret);
+      expect(error.message.length).toBeLessThanOrEqual(MAX_AGENT_KIT_ERROR_LENGTH);
     });
   });
 

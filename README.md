@@ -8,7 +8,7 @@ behaviour: no ASTs, no repositories, no Azure resources, no documents, no images
 capability mechanics and the host-neutral composition layer so capabilities and agents can reuse
 contracts without duplicating runtimes or host-specific state.
 
-> **Status: v0 foundation.** Runtime, Capability Registry, Agent Kit, and Testkit 0.2.0 are publicly
+> **Status: v0 foundation.** Runtime, Capability Registry, Agent Kit, and Testkit 0.3.0 are publicly
 > available from npm. No infrastructure has been deployed. Future four-package versions are
 > published only from intentional release tags; see [`docs/releasing.md`](docs/releasing.md).
 
@@ -82,13 +82,13 @@ contracts. There is no central proxy and no combined server.
 
 ## Packages
 
-| Package                                                                    | Purpose                                                                               |
-| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| [`@agent-tool-platform/runtime`](packages/runtime)                         | The shared implementation a capability consumes at runtime.                           |
-| [`@agent-tool-platform/testkit`](packages/testkit)                         | Reusable conformance suites that prove a capability satisfies the platform contracts. |
-| [`@agent-tool-platform/capability-registry`](packages/capability-registry) | Versioned first-party capability metadata, validation, and lookup APIs.               |
-| [`@agent-tool-platform/agent-kit`](packages/agent-kit)                     | Host-neutral agent resolution, locks, readiness plans, and generated host adapters.   |
-| [`examples/minimal-capability`](examples/minimal-capability)               | A private fixture used only to prove the platform. Never published, never a product.  |
+| Package                                                                    | Purpose                                                                                       |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| [`@agent-tool-platform/runtime`](packages/runtime)                         | The shared implementation a capability consumes at runtime.                                   |
+| [`@agent-tool-platform/testkit`](packages/testkit)                         | Reusable conformance suites that prove a capability satisfies the platform contracts.         |
+| [`@agent-tool-platform/capability-registry`](packages/capability-registry) | Versioned first-party capability metadata, validation, and lookup APIs.                       |
+| [`@agent-tool-platform/agent-kit`](packages/agent-kit)                     | Host-neutral agent builds, preparation, Agent Instance records, readiness, and host adapters. |
+| [`examples/minimal-capability`](examples/minimal-capability)               | A private fixture used only to prove the platform. Never published, never a product.          |
 
 The package count is small on purpose. Auth, routing, telemetry, errors, and process handling are
 modules inside `runtime`, not separate packages: splitting them would buy version skew and nothing
@@ -122,7 +122,7 @@ depends exactly on Runtime and Capability Registry at its own version:
 
 | Release state           | Runtime | Registry | Agent Kit | Testkit |
 | ----------------------- | ------- | -------- | --------- | ------- |
-| Current public baseline | 0.2.0   | 0.2.0    | 0.2.0     | 0.2.0   |
+| Current public baseline | 0.3.0   | 0.3.0    | 0.3.0     | 0.3.0   |
 | Future release          | X.Y.Z   | X.Y.Z    | X.Y.Z     | X.Y.Z   |
 
 Installing mismatched Platform versions is unsupported. npm may install duplicate Runtime or
@@ -139,6 +139,29 @@ checkout.
 
 `examples/minimal-capability` and this repository's root package stay private and are never
 published.
+
+### Agent lifecycle boundary
+
+Agent Kit keeps four product stages distinct:
+
+1. **Build** resolves the immutable agent composition, lock, execution bindings, host
+   compatibility, generated host files, and readiness requirements.
+2. **Prepare** realizes that exact locked build against named environment evidence and bounded
+   consumer-provided preparation actions.
+3. **Agent Instance** records a stable build/host/environment identity plus mutable prepared
+   readiness.
+4. **Run** supplies runtime activity and telemetry outside H7 preparation.
+
+Prepare never selects a different capability version, profile, binding, or adapter when the locked
+composition cannot be realized. It reports `NEEDS_SETUP` or, with concrete evidence,
+`UNAVAILABLE`. `READY` does not mean `ACTIVE`: an inactive prepared local process can remain ready.
+A reachable remote service also does not prove an external provider prerequisite is ready; those
+facts are assessed independently.
+
+Prepared Agent Instances use strict, deterministic, consumer-owned serialization. No platform
+database, daemon, home-directory store, fleet manager, endpoint value, credential, or local
+absolute path is introduced. See the [Agent Kit Prepare documentation](packages/agent-kit) for the
+generic API and example.
 
 ---
 

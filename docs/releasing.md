@@ -12,9 +12,15 @@ Kit depends exactly on Runtime and Capability Registry at the release version. C
 stay at `0.0.0-development`; Capability Registry and Agent Kit also keep `private: true` until the
 release stamper removes those two guards in an ephemeral candidate.
 
-All four packages are public at 0.2.0. The one-time Capability Registry and Agent Kit bootstrap is
+All four packages are public at 0.3.0. The one-time Capability Registry and Agent Kit bootstrap is
 complete, so the normal four-package path in section A is authoritative. Section C is retained only
 as historical context and must not be repeated.
+
+The H7 Prepare + Agent Instance layer is an additive, material Agent Kit public API expansion. The
+recommended next lockstep Platform release is **0.4.0**, the next minor after the current 0.3.0
+public release. H7 does not change checked-in development manifests, publish packages, create a
+tag, or create a GitHub Release; the normal tag-authoritative workflow remains the only release
+path after independent review and merge.
 
 ## A. Normal four-package release after bootstrap
 
