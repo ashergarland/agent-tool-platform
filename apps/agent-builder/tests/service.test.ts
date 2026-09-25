@@ -19,7 +19,8 @@ describe('Agent Builder service', () => {
       'vision',
     ]);
     expect(catalog.capabilities.find(({ id }) => id === 'azure')).toMatchObject({
-      version: '0.2.0',
+      version: '0.3.0',
+      versionStatus: 'released',
       bindingModes: ['remote'],
       profiles: expect.arrayContaining([
         expect.objectContaining({

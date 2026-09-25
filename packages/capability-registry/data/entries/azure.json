@@ -11,17 +11,17 @@
     "url": "https://github.com/ashergarland"
   },
   "version": {
-    "value": "0.2.0",
-    "status": "declared"
+    "value": "0.3.0",
+    "status": "released"
   },
   "artifacts": [
     {
       "id": "oci-container",
       "kind": "oci",
       "identifier": "ghcr.io/ashergarland/agent-tool-server-azure",
-      "version": "0.2.0",
-      "availability": "declared",
-      "reference": "server.json#/packages/0"
+      "version": "0.3.0",
+      "availability": "published",
+      "reference": "v0.3.0"
     }
   ],
   "links": {
@@ -165,8 +165,9 @@
   "source": {
     "capabilityId": "io.github.ashergarland/agent-tool-server-azure",
     "repository": "https://github.com/ashergarland/agent-tool-server-azure",
-    "revision": "a2ea5bac9162159b4b0b04ce12e80d46a1b9a79c",
-    "metadataVersion": "0.2.0",
+    "revision": "d036a12b5028c9d873a0fc6eec5ec450aebb8414",
+    "metadataVersion": "0.3.0",
+    "releaseTag": "v0.3.0",
     "metadata": {
       "server": "server.json",
       "package": "package.json",

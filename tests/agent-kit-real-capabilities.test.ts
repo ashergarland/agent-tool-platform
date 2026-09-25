@@ -270,11 +270,27 @@ describe('real first-party capability proofs', () => {
 
     expect(azure).toMatchObject({
       status: 'resolved',
+      capability: {
+        id: 'azure',
+        version: { value: '0.3.0', status: 'released' },
+        source: {
+          revision: 'd036a12b5028c9d873a0fc6eec5ec450aebb8414',
+          metadataVersion: '0.3.0',
+          releaseTag: 'v0.3.0',
+        },
+      },
       profile: { id: 'hosted-read-only' },
       binding: {
         id: 'hosted-read-only-http',
         mode: 'remote',
         interface: 'http',
+        artifact: {
+          kind: 'oci',
+          identifier: 'ghcr.io/ashergarland/agent-tool-server-azure',
+          version: '0.3.0',
+          availability: 'published',
+          reference: 'v0.3.0',
+        },
         httpClient: {
           headers: [
             {
@@ -384,6 +400,17 @@ describe('real first-party capability proofs', () => {
       (capability) => capability.binding.mode === 'remote',
     );
     const azure = remoteBindings[0]!;
+    expect(azure.capability.version.value).toBe('0.3.0');
+    expect(azure.binding).toMatchObject({
+      key: 'azure@0.3.0#hosted-read-only',
+      id: 'hosted-read-only-http',
+      mode: 'remote',
+      requiredSecretNames: ['connector-api-key'],
+      providerPrerequisites: [
+        expect.objectContaining({ id: 'azure-provider-registrations' }),
+        expect.objectContaining({ id: 'azure-resource-manager' }),
+      ],
+    });
     const readinessSnapshot = {
       schemaVersion: 1 as const,
       availableLocalBindings: localBindings.map((capability) => capability.binding.key),

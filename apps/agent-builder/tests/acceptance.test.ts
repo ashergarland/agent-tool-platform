@@ -35,7 +35,7 @@ describe('Developer Optimization Agent Builder acceptance', () => {
       kind: 'agent-lock',
       agent: { id: 'developer-optimization', version: '1.0.0' },
       capabilities: expect.arrayContaining([
-        expect.objectContaining({ id: 'azure', version: '0.2.0' }),
+        expect.objectContaining({ id: 'azure', version: '0.3.0' }),
       ]),
     });
     expect(agent?.path).toBe('.github/agents/developer-optimization.agent.md');
@@ -69,10 +69,11 @@ describe('Developer Optimization Agent Builder acceptance', () => {
 
     const azure = first.capabilities.find(({ id }) => id === 'azure');
     expect(azure).toMatchObject({
-      resolvedVersion: '0.2.0',
+      resolvedVersion: '0.3.0',
       profile: { id: 'hosted-read-only' },
       binding: { mode: 'remote', interface: 'http' },
       compatibility: { state: 'compatible', reasons: [] },
+      artifact: { kind: 'oci', availability: 'published' },
       readiness: { state: 'missing-configuration' },
       configuration: {
         endpointRequired: true,
