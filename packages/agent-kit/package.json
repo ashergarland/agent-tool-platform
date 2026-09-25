@@ -1,7 +1,7 @@
 {
   "name": "@agent-tool-platform/agent-kit",
   "version": "0.0.0-development",
-  "description": "Host-neutral agent composition, capability resolution, lock generation, readiness planning, and host adapters.",
+  "description": "Host-neutral agent builds, preparation, Agent Instance records, readiness planning, and host adapters.",
   "license": "MIT",
   "type": "module",
   "private": true,

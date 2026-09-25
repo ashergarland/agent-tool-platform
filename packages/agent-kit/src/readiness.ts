@@ -75,6 +75,15 @@ const readinessRequirementSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 
+export const readinessCapabilityStateSchema = z.enum([
+  'available-local',
+  'ready',
+  'local-setup-required',
+  'remote-provider-setup-required',
+  'missing-configuration',
+  'incompatible-binding',
+]);
+
 export const readinessPlanSchema = z.strictObject({
   schemaVersion: z.literal(READINESS_SCHEMA_VERSION),
   kind: z.literal('agent-readiness-plan'),
@@ -94,14 +103,7 @@ export const readinessPlanSchema = z.strictObject({
       version: z.string().min(1).max(200),
       profileId: z.string().min(1).max(100),
       bindingMode: z.enum(['local', 'remote', 'hybrid']),
-      state: z.enum([
-        'available-local',
-        'ready',
-        'local-setup-required',
-        'remote-provider-setup-required',
-        'missing-configuration',
-        'incompatible-binding',
-      ]),
+      state: readinessCapabilityStateSchema,
       requirements: z.array(readinessRequirementSchema),
     }),
   ),
@@ -110,6 +112,7 @@ export const readinessPlanSchema = z.strictObject({
 export type ReadinessSnapshot = z.input<typeof readinessSnapshotSchema>;
 export type ReadinessPlan = z.infer<typeof readinessPlanSchema>;
 export type ReadinessRequirement = z.infer<typeof readinessRequirementSchema>;
+export type ReadinessCapabilityState = z.infer<typeof readinessCapabilityStateSchema>;
 
 const emptySnapshot: ReadinessSnapshot = { schemaVersion: READINESS_SCHEMA_VERSION };
 

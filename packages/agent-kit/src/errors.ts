@@ -15,7 +15,11 @@ export type AgentKitErrorCode =
   | 'INVALID_LOCK'
   | 'INVALID_ADAPTER_OUTPUT'
   | 'INVALID_READINESS_INPUT'
-  | 'INVALID_INSTANCE_IDENTITY';
+  | 'INVALID_INSTANCE_IDENTITY'
+  | 'INVALID_AGENT_INSTANCE'
+  | 'INVALID_PREPARATION_INPUT'
+  | 'INVALID_PREPARATION_RESULT'
+  | 'PREPARATION_FAILED';
 
 const compact = (value: string): string => value.replace(/\s+/gu, ' ').trim();
 

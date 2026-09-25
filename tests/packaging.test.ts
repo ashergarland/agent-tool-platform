@@ -546,14 +546,14 @@ describe('release documentation', () => {
   });
 
   it('states the current four-package public status truthfully', () => {
-    expect(releasing).toMatch(/All four packages are public at 0\.2\.0/iu);
+    expect(releasing).toMatch(/All four packages are public at 0\.3\.0/iu);
     expect(releasing).toMatch(
       /one-time Capability Registry and Agent Kit bootstrap is\s+complete/iu,
     );
     expect(readme).toMatch(
-      /Runtime,\s+Capability Registry,\s+Agent Kit,\s+and Testkit 0\.2\.0 are publicly\s+>\s*available/iu,
+      /Runtime,\s+Capability Registry,\s+Agent Kit,\s+and Testkit 0\.3\.0 are publicly\s+>\s*available/iu,
     );
-    expect(readme).toMatch(/Current public baseline\s*\|\s*0\.2\.0/iu);
+    expect(readme).toMatch(/Current public baseline\s*\|\s*0\.3\.0/iu);
   });
 
   it('documents all consumers and forbids local M5.5 package wiring', () => {

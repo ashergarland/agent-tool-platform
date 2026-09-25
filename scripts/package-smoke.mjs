@@ -126,11 +126,26 @@ const documentedExports = {
   },
   '@agent-tool-platform/agent-kit': {
     '.': [
+      'PREPARATION_SCHEMA_VERSION',
+      'PREPARED_AGENT_INSTANCE_SCHEMA_VERSION',
+      'agentInstanceStateSchema',
       'buildAgent',
       'buildVsCodeAgent',
       'createAgentLock',
+      'createPreparationPlan',
+      'createPreparedAgentInstanceIdentity',
       'digestAgentLock',
+      'parsePreparedAgentInstance',
+      'prepareAgent',
+      'preparationActionResultSchema',
+      'preparationActionSchema',
+      'preparationDriverResultSchema',
+      'preparationHostIntegrationEvidenceSchema',
+      'preparationPlanSchema',
+      'preparedAgentInstanceSchema',
+      'readinessCapabilityStateSchema',
       'serializeAgentLock',
+      'serializePreparedAgentInstance',
       'vscodeHostAdapter',
     ],
   },
@@ -555,7 +570,12 @@ const exerciseAgentKitBuild = (consumer) => {
   createCapabilityRegistryReader,
   loadFirstPartyCapabilityRegistry,
 } from '@agent-tool-platform/capability-registry';
-import { buildVsCodeAgent } from '@agent-tool-platform/agent-kit';
+import {
+  buildVsCodeAgent,
+  parsePreparedAgentInstance,
+  prepareAgent,
+  serializePreparedAgentInstance,
+} from '@agent-tool-platform/agent-kit';
 
 const registry = createCapabilityRegistryReader(await loadFirstPartyCapabilityRegistry());
 const definition = {
@@ -580,6 +600,22 @@ if (
 ) {
   throw new Error('VS Code adapter did not generate the required files');
 }
+const prepared = await prepareAgent(first, {
+  environmentId: 'package-smoke-environment',
+  readinessSnapshot: {
+    schemaVersion: 1,
+    availableLocalBindings: [first.capabilities[0].binding.key],
+  },
+  hostIntegration: 'available',
+  clock: { now: () => new Date('2026-09-25T04:00:00.000Z') },
+});
+const serialized = serializePreparedAgentInstance(prepared.instance);
+if (
+  prepared.instance.state !== 'READY' ||
+  parsePreparedAgentInstance(serialized).instanceId !== prepared.instance.instanceId
+) {
+  throw new Error('Agent preparation or instance serialization did not round-trip');
+}
 console.log('ok');
 `;
   writeFileSync(join(consumer.root, 'agent-build.mjs'), source);
@@ -590,7 +626,7 @@ console.log('ok');
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     note(
-      '@agent-tool-platform/agent-kit: installed packages generate deterministic locks and adapters',
+      '@agent-tool-platform/agent-kit: installed packages build and prepare deterministic Agent Instances',
     );
   } catch (error) {
     fail(
