@@ -94,6 +94,38 @@ The package count is small on purpose. Auth, routing, telemetry, errors, and pro
 modules inside `runtime`, not separate packages: splitting them would buy version skew and nothing
 else.
 
+## Applications
+
+[`apps/agent-builder`](apps/agent-builder) is the official local Agent Builder product surface. It
+reads the first-party Capability Registry and sends canonical definitions through Agent Kit to
+produce deterministic locks, readiness plans, execution bindings, and VS Code files. It does not
+duplicate Registry records, resolution rules, readiness logic, or host generation.
+
+```text
+Browser
+   |
+   v
+Agent Builder loopback application
+   |
+   +-- @agent-tool-platform/capability-registry
+   +-- @agent-tool-platform/agent-kit
+   |
+   v
+AgentDefinition / agent.lock / readiness / VS Code outputs
+```
+
+Run it from the repository root:
+
+```bash
+npm install
+npm run builder:dev
+```
+
+The server listens on `127.0.0.1:4173` by default. H3 implements Define and Build. Prepare and Run
+remain visibly separate and are not claimed as complete; see the
+[Agent Builder documentation](apps/agent-builder/README.md) for architecture, security boundaries,
+and the future Prepare integration seam.
+
 `testkit` and `agent-kit` may depend on `runtime`; `runtime` must not depend on either package. The
 registry is a standalone sibling package whose execution-dimension vocabulary is regression-checked
 against the runtime deployment contract. Agent Kit consumes the registry through its public reader;

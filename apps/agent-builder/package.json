@@ -1,0 +1,47 @@
+{
+  "name": "@agent-tool-platform/agent-builder",
+  "version": "0.0.0-development",
+  "description": "Private local product UI for discovering capabilities and building Agent Tool Platform agents.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build:platform-dependencies": "npm run build --workspace @agent-tool-platform/runtime --workspace @agent-tool-platform/capability-registry --workspace @agent-tool-platform/agent-kit",
+    "predev": "npm run build:platform-dependencies",
+    "dev": "node --import tsx src/server/index.ts --dev",
+    "prebuild": "npm run build:platform-dependencies",
+    "build": "npm run build:server && npm run build:client",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build:client": "vite build",
+    "pretypecheck": "npm run build:platform-dependencies",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "npm run build:platform-dependencies",
+    "test": "vitest run --config vitest.config.ts",
+    "pretest:coverage": "npm run build:platform-dependencies",
+    "test:coverage": "vitest run --config vitest.config.ts --coverage",
+    "smoke": "node scripts/smoke.mjs",
+    "start": "node dist/server/server/index.js"
+  },
+  "dependencies": {
+    "@agent-tool-platform/agent-kit": "0.0.0-development",
+    "@agent-tool-platform/capability-registry": "0.0.0-development",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.7",
+    "@types/node": "22.20.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "jsdom": "26.1.0",
+    "tsx": "4.23.11",
+    "typescript": "5.9.3",
+    "vite": "8.2.1",
+    "vitest": "4.1.11"
+  }
+}

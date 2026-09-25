@@ -20,6 +20,7 @@ export default tseslint.config(
       'tests/**/*.ts',
       'scripts/**/*.ts',
       'packages/*/tests/**/*.ts',
+      'apps/*/tests/**/*.{ts,tsx}',
       'packages/testkit/src/**/*.ts',
     ],
     rules: {
@@ -35,6 +36,7 @@ export default tseslint.config(
       '**/coverage/**',
       'eslint.config.js',
       'scripts/**/*.mjs',
+      'apps/*/scripts/**/*.mjs',
       'packages/runtime/bin/*.js',
       'openapi.fixture.json',
     ],

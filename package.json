@@ -10,19 +10,26 @@
   },
   "workspaces": [
     "packages/*",
-    "examples/*"
+    "examples/*",
+    "apps/*"
   ],
   "scripts": {
-    "build": "npm run deployment:schemas && npm run registry:schemas && npm run registry:generate && npm run build --workspace @agent-tool-platform/runtime --workspace @agent-tool-platform/capability-registry && npm run build --workspaces --if-present",
+    "build": "npm run build:platform && npm run build:server --workspace @agent-tool-platform/agent-builder && npm run build:client --workspace @agent-tool-platform/agent-builder",
+    "build:platform": "npm run deployment:schemas && npm run registry:schemas && npm run registry:generate && npm run build --workspace @agent-tool-platform/runtime --workspace @agent-tool-platform/capability-registry --workspace @agent-tool-platform/agent-kit --workspace @agent-tool-platform/testkit --workspace @agent-tool-platform/example-minimal-capability",
     "clean": "node scripts/clean.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "npm run typecheck:platform && npm run typecheck --workspace @agent-tool-platform/agent-builder",
+    "typecheck:platform": "tsc -p tsconfig.json --noEmit",
+    "prelint": "npm run build:platform-dependencies --workspace @agent-tool-platform/agent-builder",
     "lint": "eslint .",
+    "prelint:fix": "npm run build:platform-dependencies --workspace @agent-tool-platform/agent-builder",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run",
+    "test": "npm run test:platform && npm run test --workspace @agent-tool-platform/agent-builder",
+    "test:platform": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "npm run test:coverage:platform && npm run test:coverage --workspace @agent-tool-platform/agent-builder",
+    "test:coverage:platform": "vitest run --coverage --exclude \"apps/*/tests/**/*.test.{ts,tsx}\"",
     "openapi:emit": "tsx scripts/emit-openapi.ts openapi.fixture.json",
     "deployment:schemas": "tsx scripts/emit-deployment-schemas.ts",
     "registry:schemas": "tsx scripts/emit-capability-registry-schemas.ts",
@@ -31,7 +38,10 @@
     "registry:verify-sources": "tsx scripts/verify-capability-registry-sources.ts",
     "metadata:validate": "tsx scripts/validate-metadata.ts",
     "package:smoke": "node scripts/package-smoke.mjs",
-    "release:check": "node scripts/release-check.mjs"
+    "release:check": "node scripts/release-check.mjs",
+    "builder:dev": "npm run dev --workspace @agent-tool-platform/agent-builder",
+    "builder:test": "npm run test --workspace @agent-tool-platform/agent-builder",
+    "builder:smoke": "npm run smoke --workspace @agent-tool-platform/agent-builder"
   },
   "repository": {
     "type": "git",
@@ -41,7 +51,7 @@
     "@eslint/js": "9.39.5",
     "@types/js-yaml": "4.0.9",
     "@types/node": "22.20.1",
-    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/coverage-v8": "4.1.11",
     "eslint": "9.39.5",
     "eslint-config-prettier": "10.1.8",
     "js-yaml": "4.3.1",
@@ -49,7 +59,7 @@
     "tsx": "4.23.11",
     "typescript": "5.9.3",
     "typescript-eslint": "8.66.0",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "allowScripts": {
     "esbuild@0.28.2": true

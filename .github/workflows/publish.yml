@@ -152,16 +152,16 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Typecheck publishable Platform packages
+        run: npm run typecheck:platform
 
-      - name: Unit tests and conformance suites with coverage
+      - name: Platform unit tests and conformance suites with coverage
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: npm run test:coverage
+        run: npm run test:coverage:platform
 
-      - name: Build every package
-        run: npm run build
+      - name: Build publishable Platform packages
+        run: npm run build:platform
 
       - name: Package publication smoke test
         run: npm run package:smoke
