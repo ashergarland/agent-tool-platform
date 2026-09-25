@@ -51,6 +51,7 @@ const agentKit = read('packages/agent-kit/package.json');
 const capabilityRegistry = read('packages/capability-registry/package.json');
 const capabilityRegistryData = read('packages/capability-registry/data/first-party-registry.json');
 const fixture = read('examples/minimal-capability/package.json');
+const agentBuilder = read('apps/agent-builder/package.json');
 const publishable = [
   { name: runtimeName, directory: 'packages/runtime' },
   { name: capabilityRegistryName, directory: 'packages/capability-registry' },
@@ -217,12 +218,13 @@ for (const [name, expectedDependencies] of expectedInternalDependencies) {
   }
 }
 
-// The repository itself and its fixtures stay unpublishable.
-for (const [path, manifest] of [
-  ['package.json', root],
-  ['examples/minimal-capability/package.json', fixture],
+// Repository-owned applications and fixtures stay outside the package publication set.
+for (const [path, manifest, reason] of [
+  ['package.json', root, 'the repository root is not publishable'],
+  ['examples/minimal-capability/package.json', fixture, 'the fixture is not publishable'],
+  ['apps/agent-builder/package.json', agentBuilder, 'the application is not an npm package'],
 ]) {
-  if (manifest.private !== true) fail(`${path}: must remain private; it is not a product`);
+  if (manifest.private !== true) fail(`${path}: must remain private; ${reason}`);
 }
 
 if (failures.length > 0) {
@@ -235,6 +237,7 @@ if (failures.length > 0) {
       `- ${capabilityRegistryName}@${capabilityRegistry.version} -> public on ${npmRegistry}\n` +
       `- ${agentKitName}@${agentKit.version} -> public on ${npmRegistry}, depending on ${runtimeName}@${agentKit.dependencies?.[runtimeName]} and ${capabilityRegistryName}@${agentKit.dependencies?.[capabilityRegistryName]}\n` +
       `- ${testkitName}@${testkit.version} -> public on ${npmRegistry}, depending on ${runtimeName}@${declaredRuntime}\n` +
+      '- apps/agent-builder remains a private application workspace outside the publication set.\n' +
       'Publication order is runtime, capability-registry, agent-kit, then testkit. This check publishes nothing.\n',
   );
 }

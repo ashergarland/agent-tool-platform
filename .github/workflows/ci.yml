@@ -34,11 +34,14 @@ jobs:
         run: npm run typecheck
 
       # Coverage thresholds live in vitest.config.ts and fail the run on their own.
-      - name: Unit tests and conformance suites with coverage
+      - name: Unit, conformance, and Agent Builder acceptance tests with coverage
         run: npm run test:coverage
 
-      - name: Build every package
+      - name: Build every package and the Agent Builder production frontend
         run: npm run build
+
+      - name: Smoke test the production Agent Builder
+        run: npm run builder:smoke
 
       # Proves consumers get what the exports maps promise: all four packages are packed and
       # exercised outside this workspace, including external Registry and Agent Kit installations.

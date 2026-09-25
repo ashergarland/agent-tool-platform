@@ -31,6 +31,7 @@ const releaseFiles = [
   'packages/runtime/package.json',
   'packages/testkit/package.json',
   'examples/minimal-capability/package.json',
+  'apps/agent-builder/package.json',
   'scripts/lib/tarball.mjs',
   'scripts/release-check.mjs',
   'scripts/release-registry-state.mjs',
@@ -97,6 +98,7 @@ describe('release version stamping', () => {
     const runtime = readJson(repositoryRoot, 'packages/runtime/package.json');
     const testkit = readJson(repositoryRoot, 'packages/testkit/package.json');
     const fixture = readJson(repositoryRoot, 'examples/minimal-capability/package.json');
+    const agentBuilder = readJson(repositoryRoot, 'apps/agent-builder/package.json');
     const lock = readJson(repositoryRoot, 'package-lock.json');
 
     const expectedVersion = process.env.RELEASE_VERSION ?? developmentVersion;
@@ -112,6 +114,7 @@ describe('release version stamping', () => {
     expect(registryData.registryVersion).toBe(expectedVersion);
     expect(testkit.dependencies?.[runtimeName]).toBe(expectedVersion);
     expect(fixture.dependencies?.[runtimeName]).toBe(expectedVersion);
+    expect(agentBuilder.private).toBe(true);
     expect(lock.version).toBe(developmentVersion);
     expect(lock.packages?.['']?.version).toBe(developmentVersion);
     expect(lock.packages?.['packages/agent-kit']?.version).toBe(developmentVersion);
@@ -127,6 +130,7 @@ describe('release version stamping', () => {
     expect(lock.packages?.['packages/testkit']?.dependencies?.[runtimeName]).toBe(
       developmentVersion,
     );
+    expect(lock.packages?.['apps/agent-builder']?.version).toBe(developmentVersion);
   });
 
   it('accepts development state normally and stamped state during a release', () => {

@@ -15,6 +15,7 @@ const targets = [
   'packages/testkit/tsconfig.build.tsbuildinfo',
   'examples/minimal-capability/dist',
   'examples/minimal-capability/tsconfig.build.tsbuildinfo',
+  'apps/agent-builder/dist',
 ];
 
 for (const target of targets) {

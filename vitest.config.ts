@@ -18,7 +18,11 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['tests/**/*.test.ts', 'packages/*/tests/**/*.test.ts'],
+    include: [
+      'tests/**/*.test.ts',
+      'packages/*/tests/**/*.test.ts',
+      'apps/*/tests/**/*.test.{ts,tsx}',
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],

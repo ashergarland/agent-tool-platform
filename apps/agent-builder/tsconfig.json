@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "types": ["node", "vite/client", "vitest/globals"],
+    "paths": {
+      "@agent-tool-platform/agent-kit": ["../../packages/agent-kit/src/index.ts"],
+      "@agent-tool-platform/capability-registry": [
+        "../../packages/capability-registry/src/index.ts"
+      ],
+      "@agent-tool-platform/runtime": ["../../packages/runtime/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx", "*.config.ts"]
+}

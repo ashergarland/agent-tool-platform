@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "jsx": "react-jsx",
+    "noEmit": false,
+    "outDir": "dist/server",
+    "rootDir": "src",
+    "sourceMap": true,
+    "types": ["node"],
+    "paths": {
+      "@agent-tool-platform/agent-kit": ["../../packages/agent-kit/dist/index.d.ts"],
+      "@agent-tool-platform/capability-registry": [
+        "../../packages/capability-registry/dist/index.d.ts"
+      ]
+    }
+  },
+  "include": ["src/server/**/*.ts", "src/shared/**/*.ts"]
+}
