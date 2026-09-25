@@ -27,6 +27,9 @@ The Registry loader and Agent Kit use Node APIs, so they remain behind a small s
 boundary rather than entering the browser bundle. The backend uses the Node HTTP server directly;
 there is no full-stack framework, persistence tier, proxy, or second composition engine. Vite runs
 as development middleware, and the same Node server serves bounded production assets after build.
+Development, typecheck, test, and production build scripts first build the Platform dependencies,
+then resolve their package-root exports to `dist/index.js` and `dist/index.d.ts`. Builder
+configuration does not alias public Platform package names to package source.
 
 The API exposes only:
 
@@ -147,13 +150,14 @@ runtime health.
 Prepare will later realize the build in a chosen environment and create the expanded Agent Instance
 model. H3 deliberately renders Prepare as disabled/coming next. The application boundary is ready
 for a future `prepareAgent(...)` service beside the existing Build service, but this branch defines
-no replacement Prepare or Agent Instance contract. H7 reconciliation must consume the public
-Platform contract after that work is reviewed and integrated.
+no replacement Prepare or Agent Instance contract. A follow-up can connect the integrated public
+Platform Prepare contract without replacing the existing Build service.
 
 ## Validation
 
 ```bash
 npm run builder:test      # service, API, component, error, and seven-capability acceptance tests
+npm run test:coverage --workspace @agent-tool-platform/agent-builder
 npm run typecheck
 npm run build
 npm run builder:smoke

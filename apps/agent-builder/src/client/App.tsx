@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { AgentDefinition } from '@agent-tool-platform/agent-kit';
-import { buildAgent, BuilderApiError, getCapabilityCatalog } from './api.js';
+import {
+  buildAgent,
+  BuilderApiError,
+  BuilderUnavailableError,
+  getCapabilityCatalog,
+} from './api.js';
 import type {
   BuildAgentResult,
   BuildCapabilityResult,
@@ -65,6 +70,9 @@ export const deriveAgentId = (name: string): string => {
 const uiError = (error: unknown, fallback: string): UiError => {
   if (error instanceof BuilderApiError) {
     return { code: error.code, summary: error.message, issues: error.issues };
+  }
+  if (error instanceof BuilderUnavailableError) {
+    return { summary: error.message, issues: [] };
   }
   return { summary: fallback, issues: [] };
 };

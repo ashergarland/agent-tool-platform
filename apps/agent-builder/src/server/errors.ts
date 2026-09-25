@@ -4,6 +4,21 @@ import type { BuilderErrorCode, BuilderErrorResponse } from '../shared/contracts
 
 const MAX_ISSUES = 20;
 const MAX_ISSUE_LENGTH = 300;
+type BuildAgentKitErrorCode = Extract<AgentKitErrorCode, BuilderErrorCode>;
+
+const buildAgentKitErrorCodes = new Set<AgentKitErrorCode>([
+  'INVALID_AGENT_DEFINITION',
+  'INVALID_REGISTRY_RECORD',
+  'CAPABILITY_NOT_FOUND',
+  'CAPABILITY_VERSION_NOT_FOUND',
+  'CAPABILITY_PROFILE_NOT_FOUND',
+  'INCOMPATIBLE_BINDING',
+  'INSTRUCTION_LIMIT_EXCEEDED',
+  'INVALID_LOCK',
+  'INVALID_ADAPTER_OUTPUT',
+  'INVALID_READINESS_INPUT',
+  'INVALID_INSTANCE_IDENTITY',
+]);
 
 const compact = (value: string): string => value.replace(/\s+/gu, ' ').trim();
 
@@ -12,6 +27,9 @@ const bound = (value: string, maximum = MAX_ISSUE_LENGTH): string =>
 
 const boundedIssues = (issues: readonly string[]): readonly string[] =>
   issues.slice(0, MAX_ISSUES).map((issue) => bound(compact(issue)));
+
+const isBuildAgentKitErrorCode = (code: AgentKitErrorCode): code is BuildAgentKitErrorCode =>
+  buildAgentKitErrorCodes.has(code);
 
 export class BuilderServiceError extends Error {
   public override readonly name = 'BuilderServiceError';
@@ -33,6 +51,15 @@ const statusForAgentKitError = (code: AgentKitErrorCode): number =>
 export const asBuildServiceError = (error: unknown): BuilderServiceError => {
   if (error instanceof BuilderServiceError) return error;
   if (error instanceof AgentKitError) {
+    if (!isBuildAgentKitErrorCode(error.code)) {
+      return new BuilderServiceError(
+        'BUILD_FAILED',
+        'The agent could not be built. Try again or inspect the local server diagnostics.',
+        [],
+        500,
+        { cause: error },
+      );
+    }
     return new BuilderServiceError(
       error.code,
       error.message.split('\n', 1)[0] ?? 'Agent build failed.',

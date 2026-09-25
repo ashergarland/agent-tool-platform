@@ -9,14 +9,19 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "predev": "npm run build --workspace @agent-tool-platform/runtime --workspace @agent-tool-platform/capability-registry --workspace @agent-tool-platform/agent-kit",
-    "dev": "tsx src/server/index.ts --dev",
-    "prebuild": "npm run build --workspace @agent-tool-platform/runtime --workspace @agent-tool-platform/capability-registry --workspace @agent-tool-platform/agent-kit",
+    "build:platform-dependencies": "npm run build --workspace @agent-tool-platform/runtime --workspace @agent-tool-platform/capability-registry --workspace @agent-tool-platform/agent-kit",
+    "predev": "npm run build:platform-dependencies",
+    "dev": "node --import tsx src/server/index.ts --dev",
+    "prebuild": "npm run build:platform-dependencies",
     "build": "npm run build:server && npm run build:client",
     "build:server": "tsc -p tsconfig.server.json",
     "build:client": "vite build",
+    "pretypecheck": "npm run build:platform-dependencies",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "npm run build:platform-dependencies",
     "test": "vitest run --config vitest.config.ts",
+    "pretest:coverage": "npm run build:platform-dependencies",
+    "test:coverage": "vitest run --config vitest.config.ts --coverage",
     "smoke": "node scripts/smoke.mjs",
     "start": "node dist/server/server/index.js"
   },
