@@ -4,8 +4,9 @@ Agent Builder is the private, local product UI for Agent Tool Platform. It lets 
 first-party capabilities, author a host-neutral agent, and run the real Agent Kit build pipeline
 without learning Registry schemas, package identities, MCP transports, or binding keys.
 
-H3 implements **Define** and **Build**. It does not implement **Prepare**, run an agent, install
-capabilities, deploy providers, or manage Agent Instances.
+Builder implements **Define** and **Build**, including capability execution/profile policy. It does
+not implement **Prepare**, run an agent, install capabilities, deploy providers, or manage Agent
+Instances.
 
 ## Architecture
 
@@ -71,8 +72,8 @@ Registry presentation data:
 
 - display name, id, description, and exact current version/status;
 - category, tags, and tool count;
-- supported profiles and execution dimensions; and
-- local, remote, or hybrid binding availability.
+- supported profiles and their read-only or mutating posture; and
+- local, remote, or hybrid binding availability for each profile.
 
 There is no UI-owned capability JSON. A Registry load failure is a visible error rather than an
 empty or invented catalog.
@@ -85,12 +86,24 @@ The authoring surface requires:
 - deterministic technical id;
 - explicit initial version `1.0.0`;
 - editable instructions; and
-- one or more capability identities.
+- one or more capability identities; and
+- an execution policy: Automatic, Local only, or Custom.
 
 `Developer Optimization Agent` derives `developer-optimization`; the id remains inspectable and
 editable. Agent Kit's public schema is authoritative for identifier, version, definition, and
-selection validation. The normal UX does not expose host, version, profile, transport, or secret
-controls.
+selection validation. Automatic remains the default and omits profile values so Agent Kit retains
+authority over normal profile and binding resolution. Local only writes explicit Registry profile
+ids and blocks Build when any selected capability lacks a local profile. Custom exposes friendly
+profile choices only when the Registry declares meaningful alternatives. Binding ids, transport
+configuration, endpoints, and secret values are not authoring controls.
+
+The Builder keeps two axes distinct:
+
+1. the Agent runtime is a local VS Code agent; and
+2. each capability independently resolves to Local, Remote, or Hybrid execution.
+
+Every profile choice also shows its separate Read-only or Mutating posture. Read-only profiles are
+presented before mutating alternatives, and mutation is never inferred from execution topology.
 
 The Developer Optimization preset uses one checked-in instruction source and selects:
 
@@ -98,12 +111,13 @@ The Developer Optimization preset uses one checked-in instruction source and sel
 2. `git-optimizer`;
 3. `data-cruncher`;
 4. `doc-rag`;
-5. `vision`;
+5. `vision` with explicit `local-package`;
 6. `document-optimizer`; and
-7. `azure`.
+7. `azure` with explicit `hosted-read-only`.
 
 The preset only fills the ordinary form. It has no precomputed lock, bindings, readiness, or host
-files and uses the same Build service as every other composition.
+files and uses the same Build service as every other composition. Its explicit profiles appear as
+Custom selections so the form truthfully represents its canonical definition.
 
 ## Build
 
@@ -127,15 +141,16 @@ Instance identity seam, and VS Code adapter output.
 The result displays:
 
 - resolved capability versions and profiles;
-- local, remote, and hybrid bindings;
+- local, remote, and hybrid bindings plus read-only or mutating posture;
+- the local Agent runtime separately from mixed capability execution;
 - exact readiness states and setup/configuration requirements;
 - `agent.lock`;
 - `.github/agents/<agent-id>.agent.md`;
 - `.vscode/mcp.json`; and
 - composed instructions.
 
-Artifact previews use the exact strings returned by Agent Kit. Copying is browser-local; H3 does not
-write generated files.
+Artifact previews use the exact strings returned by Agent Kit. Copying is browser-local; Builder
+does not write generated files.
 
 Authenticated remote bindings remain reference-based. For the baseline Azure entry, the result
 shows the endpoint and `connector-api-key` requirements plus the Registry-defined `x-api-key`
@@ -147,11 +162,9 @@ Build creates a deterministic, validated composition and reports what an environ
 It does not install an artifact, establish a provider connection, collect a credential, or prove
 runtime health.
 
-Prepare will later realize the build in a chosen environment and create the expanded Agent Instance
-model. H3 deliberately renders Prepare as disabled/coming next. The application boundary is ready
-for a future `prepareAgent(...)` service beside the existing Build service, but this branch defines
-no replacement Prepare or Agent Instance contract. A follow-up can connect the integrated public
-Platform Prepare contract without replacing the existing Build service.
+Prepare can later realize the build in a chosen environment and create an Agent Instance. Builder
+deliberately renders Prepare as disabled/coming next and invokes no Prepare API. This implementation
+defines no replacement Prepare or Agent Instance contract.
 
 ## Validation
 
@@ -163,10 +176,11 @@ npm run build
 npm run builder:smoke
 ```
 
-The acceptance test sends the real Developer Optimization preset through the Builder service, real
-Capability Registry, and `buildVsCodeAgent()`. It checks all seven resolutions, deterministic
-outputs, binding/readiness presentation, generated files, and Azure configuration references
-without supplying a secret.
+The tests send Automatic, Local only, Custom, and the real Developer Optimization preset through
+the Builder service/API boundary, real Capability Registry, and `buildVsCodeAgent()`. They check
+Registry-derived profile choices, mutation posture, local-only incompatibility, mixed execution,
+deterministic outputs, binding/readiness presentation, generated files, and Azure configuration
+references without supplying a secret.
 
 ## Current limitations
 
@@ -175,8 +189,4 @@ without supplying a secret.
 - No capability or provider is installed/deployed.
 - No endpoints or secret values are collected.
 - No Agent Instance inventory, telemetry, or management view exists.
-- VS Code is the only polished H3 adapter result.
-
-H9 can add an `Agents` area to the existing product shell without replacing the catalog, authoring,
-or Build service. It should consume the reconciled prepared-instance contracts rather than creating
-an application-owned persistence schema.
+- VS Code is the only polished Builder adapter result.

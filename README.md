@@ -98,8 +98,10 @@ else.
 
 [`apps/agent-builder`](apps/agent-builder) is the official local Agent Builder product surface. It
 reads the first-party Capability Registry and sends canonical definitions through Agent Kit to
-produce deterministic locks, readiness plans, execution bindings, and VS Code files. It does not
-duplicate Registry records, resolution rules, readiness logic, or host generation.
+produce deterministic locks, readiness plans, execution bindings, and VS Code files. Its
+Automatic, Local only, and Custom capability profile UX keeps the local agent runtime separate from
+local, remote, or hybrid capability execution and shows read-only versus mutating posture. It does
+not duplicate Registry records, default resolution rules, readiness logic, or host generation.
 
 ```text
 Browser
@@ -121,8 +123,8 @@ npm install
 npm run builder:dev
 ```
 
-The server listens on `127.0.0.1:4173` by default. H3 implements Define and Build. Prepare and Run
-remain visibly separate and are not claimed as complete; see the
+The server listens on `127.0.0.1:4173` by default. Builder implements Define and Build. Prepare and
+Run remain visibly separate and are not claimed as complete; see the
 [Agent Builder documentation](apps/agent-builder/README.md) for architecture, security boundaries,
 and the future Prepare integration seam.
 

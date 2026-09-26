@@ -25,12 +25,87 @@ describe('Agent Builder service', () => {
       profiles: expect.arrayContaining([
         expect.objectContaining({
           id: 'hosted-read-only',
+          bindingModes: ['remote'],
           dimensions: expect.objectContaining({
             execution: 'hosted',
             access: 'authenticated-service',
+            mutation: 'read-only',
           }),
         }),
       ]),
+    });
+  });
+
+  it('leaves automatic profile choice to Agent Kit and does not prefer mutation', async () => {
+    const service = createBuilderService();
+    const result = await service.buildAgent({
+      ...developerOptimizationPreset,
+      capabilities: [{ id: 'vision' }, { id: 'azure' }],
+    });
+
+    expect(
+      result.capabilities.map(({ id, profile, binding }) => ({
+        id,
+        profile: profile.id,
+        mutation: profile.mutation,
+        mode: binding.mode,
+      })),
+    ).toEqual([
+      {
+        id: 'azure',
+        profile: 'hosted-read-only',
+        mutation: 'read-only',
+        mode: 'remote',
+      },
+      {
+        id: 'vision',
+        profile: 'local-package',
+        mutation: 'mutating',
+        mode: 'local',
+      },
+    ]);
+  });
+
+  it('accepts explicit Registry profiles and rejects unknown profiles through Agent Kit', async () => {
+    const service = createBuilderService();
+    const custom = await service.buildAgent({
+      ...developerOptimizationPreset,
+      capabilities: [
+        { id: 'vision', profile: 'hybrid-azure-package' },
+        { id: 'azure', profile: 'hosted-mutating' },
+      ],
+    });
+
+    expect(
+      custom.capabilities.map(({ id, profile, binding }) => ({
+        id,
+        profile: profile.id,
+        mutation: profile.mutation,
+        mode: binding.mode,
+      })),
+    ).toEqual([
+      {
+        id: 'azure',
+        profile: 'hosted-mutating',
+        mutation: 'mutating',
+        mode: 'remote',
+      },
+      {
+        id: 'vision',
+        profile: 'hybrid-azure-package',
+        mutation: 'mutating',
+        mode: 'hybrid',
+      },
+    ]);
+
+    await expect(
+      service.buildAgent({
+        ...developerOptimizationPreset,
+        capabilities: [{ id: 'azure', profile: 'hosted-read-only-http' }],
+      }),
+    ).rejects.toMatchObject({
+      code: 'CAPABILITY_PROFILE_NOT_FOUND',
+      status: 400,
     });
   });
 
