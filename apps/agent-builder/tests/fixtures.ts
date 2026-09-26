@@ -21,8 +21,8 @@ const catalogCapability = (
   id,
   displayName,
   description: `${displayName} provides bounded, Registry-owned capability behavior.`,
-  version: id === 'azure' ? '0.2.0' : '0.1.0',
-  versionStatus: id === 'ast-summarizer' ? 'released' : 'declared',
+  version: id === 'azure' ? '0.3.0' : '0.1.0',
+  versionStatus: id === 'ast-summarizer' || id === 'azure' ? 'released' : 'declared',
   category: id === 'azure' ? 'Cloud' : 'Development',
   tags: ['context-optimization'],
   toolCount: id === 'azure' ? 18 : 2,
@@ -83,7 +83,7 @@ export const buildResultFixture: BuildAgentResult = {
       },
       artifact: {
         kind: remote ? 'oci' : 'npm',
-        availability: remote ? 'declared' : 'published',
+        availability: 'published',
       },
       readiness: {
         state: remote ? 'missing-configuration' : 'local-setup-required',

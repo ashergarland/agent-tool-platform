@@ -491,6 +491,34 @@ describe('registry semantic validation', () => {
 });
 
 describe('Agent Kit read seam', () => {
+  it('resolves Azure 0.3.0 as the current released capability', async () => {
+    const registry = await loadFirstPartyCapabilityRegistry();
+    const reader = createCapabilityRegistryReader(registry);
+
+    expect(reader.getCapability('azure')).toMatchObject({
+      id: 'azure',
+      version: {
+        value: '0.3.0',
+        status: 'released',
+      },
+      artifacts: [
+        {
+          id: 'oci-container',
+          kind: 'oci',
+          identifier: 'ghcr.io/ashergarland/agent-tool-server-azure',
+          version: '0.3.0',
+          availability: 'published',
+          reference: 'v0.3.0',
+        },
+      ],
+      source: {
+        revision: 'd036a12b5028c9d873a0fc6eec5ec450aebb8414',
+        metadataVersion: '0.3.0',
+        releaseTag: 'v0.3.0',
+      },
+    });
+  });
+
   it('enumerates, resolves, and exposes profiles and bindings without composition logic', async () => {
     const registry = await loadFirstPartyCapabilityRegistry();
     const reader = createCapabilityRegistryReader(registry);

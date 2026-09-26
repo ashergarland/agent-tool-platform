@@ -141,9 +141,10 @@ npm run registry:verify-sources -- `
   "vision=C:\path\to\agent-tool-server-vision"
 ```
 
-The command requires a checkout for every registry entry. It verifies pinned revisions,
-server/package identity and version metadata, tag-stamped release versions, artifact declarations,
-and normalized source profiles. No local paths are written into registry data.
+The command verifies each supplied checkout against its registry entry. Supplying every registry
+entry performs a complete source drift check. It verifies pinned revisions, server/package identity
+and version metadata, tag-stamped release versions, artifact declarations, and normalized source
+profiles. No local paths are written into registry data.
 
 ## Public/private boundary
 

@@ -25,7 +25,12 @@ if (arguments_.length === 0) {
 } else {
   const roots = arguments_.map(parseSourceRoot);
   const registry = await loadFirstPartyCapabilityRegistry();
-  const issues = await verifyCapabilitySources(registry, roots);
+  const requestedCapabilities = new Set(roots.map(({ capabilityId }) => capabilityId));
+  const selectedRegistry = {
+    ...registry,
+    capabilities: registry.capabilities.filter(({ id }) => requestedCapabilities.has(id)),
+  };
+  const issues = await verifyCapabilitySources(selectedRegistry, roots);
   for (const issue of issues) {
     process.stderr.write(`${issue.capabilityId}: ${issue.message}\n`);
   }
