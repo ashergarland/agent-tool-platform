@@ -10,11 +10,18 @@ import type {
   BuildAgentResult,
   BuildCapabilityResult,
   CapabilityCatalogItem,
+  CapabilityCatalogProfile,
   CapabilityCatalogResponse,
   GeneratedArtifact,
   ReadinessState,
 } from '../shared/contracts.js';
 import { developerOptimizationPreset } from '../shared/developer-optimization-preset.js';
+import {
+  localProfileFor,
+  planCapabilitySelections,
+  selectableProfiles,
+  type ExecutionPolicy,
+} from './execution-policy.js';
 
 type Page = 'builder' | 'capabilities';
 type LoadState = 'error' | 'loading' | 'ready';
@@ -25,6 +32,8 @@ interface AgentDraft {
   readonly version: string;
   readonly instructions: string;
   readonly selectedCapabilityIds: readonly string[];
+  readonly executionPolicy: ExecutionPolicy;
+  readonly profileSelections: Readonly<Record<string, string>>;
 }
 
 interface UiError {
@@ -39,6 +48,8 @@ const emptyDraft: AgentDraft = {
   version: '1.0.0',
   instructions: '',
   selectedCapabilityIds: [],
+  executionPolicy: 'automatic',
+  profileSelections: {},
 };
 
 const readinessPresentation: Readonly<
@@ -60,6 +71,47 @@ const modePresentation = {
   remote: { label: 'Remote', icon: 'R' },
   hybrid: { label: 'Hybrid', icon: 'H' },
 } as const;
+
+const mutationPresentation = {
+  'read-only': 'Read-only',
+  mutating: 'Mutating',
+} as const;
+
+const executionPolicyPresentation: Readonly<
+  Record<ExecutionPolicy, { readonly label: string; readonly description: string }>
+> = {
+  automatic: {
+    label: 'Automatic',
+    description: 'Agent Kit chooses the normal compatible default profile during Build.',
+  },
+  'local-only': {
+    label: 'Local only',
+    description:
+      'Require Registry-declared local profiles and favor read-only when local alternatives exist.',
+  },
+  custom: {
+    label: 'Custom',
+    description:
+      'Choose profiles for capabilities with meaningful alternatives; Auto remains valid.',
+  },
+};
+
+const profileExecutionLabel = (profile: CapabilityCatalogProfile): string =>
+  profile.bindingModes.length === 0
+    ? 'Unavailable'
+    : profile.bindingModes.map((mode) => modePresentation[mode].label).join(' / ');
+
+const profilePostureLabel = (profile: CapabilityCatalogProfile): string =>
+  `${profileExecutionLabel(profile)} · ${mutationPresentation[profile.dimensions.mutation]}`;
+
+const executionShapeLabel = (result: BuildAgentResult): string => {
+  const activeModes = (['local', 'remote', 'hybrid'] as const).filter(
+    (mode) => result.execution[mode] > 0,
+  );
+  if (activeModes.length > 1) return 'Mixed capabilities';
+  const mode = activeModes[0];
+  return mode === undefined ? 'No capabilities' : `${modePresentation[mode].label} capabilities`;
+};
 
 export const deriveAgentId = (name: string): string => {
   const words = name.toLowerCase().match(/[a-z0-9]+/gu) ?? [];
@@ -275,19 +327,122 @@ const VersionBadge = ({
   </span>
 );
 
+const ProfilePosture = ({ profile }: { readonly profile: CapabilityCatalogProfile }): ReactNode => (
+  <span className={`profile-posture ${profile.dimensions.mutation}`}>
+    {profilePostureLabel(profile)}
+  </span>
+);
+
+const CapabilityExecutionControl = ({
+  capability,
+  policy,
+  selectedProfileId,
+  onProfileChange,
+}: {
+  readonly capability: CapabilityCatalogItem;
+  readonly policy: ExecutionPolicy;
+  readonly selectedProfileId: string | undefined;
+  readonly onProfileChange: (capabilityId: string, profileId: string | undefined) => void;
+}): ReactNode => {
+  const profiles = selectableProfiles(capability);
+
+  if (policy === 'automatic') {
+    return (
+      <div className="capability-execution-summary">
+        <small>Execution</small>
+        <strong>Auto</strong>
+        <span>Profile and mutation posture resolve through Agent Kit during Build.</span>
+      </div>
+    );
+  }
+
+  if (policy === 'local-only') {
+    const profile = localProfileFor(capability);
+    if (profile === undefined) {
+      return (
+        <div className="capability-execution-summary incompatible">
+          <small>Execution</small>
+          <strong>Local only unavailable</strong>
+          <span>No Registry profile for this capability can execute locally.</span>
+        </div>
+      );
+    }
+    return (
+      <div className="capability-execution-summary">
+        <small>Execution · Local only</small>
+        <ProfilePosture profile={profile} />
+        <span>{profile.description}</span>
+      </div>
+    );
+  }
+
+  if (profiles.length <= 1) {
+    const profile = profiles[0];
+    return (
+      <div className="capability-execution-summary">
+        <small>Execution</small>
+        <strong>Auto · only Registry profile</strong>
+        {profile === undefined ? null : <ProfilePosture profile={profile} />}
+        <span>Agent Kit resolves this capability during Build; no extra choice is needed.</span>
+      </div>
+    );
+  }
+
+  return (
+    <fieldset className="profile-picker">
+      <legend>Execution profile</legend>
+      <label className={selectedProfileId === undefined ? 'selected' : ''}>
+        <input
+          checked={selectedProfileId === undefined}
+          name={`profile-${capability.id}`}
+          onChange={() => onProfileChange(capability.id, undefined)}
+          type="radio"
+        />
+        <span>
+          <strong>Auto</strong>
+          <small>Agent Kit chooses the normal compatible default.</small>
+        </span>
+      </label>
+      {profiles.map((profile) => (
+        <label className={selectedProfileId === profile.id ? 'selected' : ''} key={profile.id}>
+          <input
+            checked={selectedProfileId === profile.id}
+            name={`profile-${capability.id}`}
+            onChange={() => onProfileChange(capability.id, profile.id)}
+            type="radio"
+          />
+          <span>
+            <ProfilePosture profile={profile} />
+            <small>{profile.description}</small>
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  );
+};
+
 const CapabilityCard = ({
   capability,
   selected,
   selectable = false,
   onToggle,
+  executionPolicy,
+  selectedProfileId,
+  onProfileChange,
 }: {
   readonly capability: CapabilityCatalogItem;
   readonly selected?: boolean;
   readonly selectable?: boolean;
   readonly onToggle?: (id: string) => void;
+  readonly executionPolicy?: ExecutionPolicy;
+  readonly selectedProfileId?: string | undefined;
+  readonly onProfileChange?: (capabilityId: string, profileId: string | undefined) => void;
 }): ReactNode => {
+  const profilePostures = [
+    ...new Set(selectableProfiles(capability).map((profile) => profilePostureLabel(profile))),
+  ];
   const content = (
-    <>
+    <div className="capability-card-content">
       <div className="capability-card-topline">
         <div className="capability-symbol">{capability.displayName.slice(0, 2).toUpperCase()}</div>
         <VersionBadge status={capability.versionStatus} version={capability.version} />
@@ -303,9 +458,9 @@ const CapabilityCard = ({
             {modePresentation[mode].label}
           </span>
         ))}
-        {capability.profiles.map((profile) => (
-          <span className="profile-chip" key={profile.id}>
-            {profile.id}
+        {profilePostures.map((posture) => (
+          <span className="profile-chip" key={posture}>
+            {posture}
           </span>
         ))}
       </div>
@@ -322,19 +477,29 @@ const CapabilityCard = ({
           {selected ? 'Selected' : 'Add capability'}
         </div>
       ) : null}
-    </>
+    </div>
   );
 
   if (!selectable) return <article className="capability-card">{content}</article>;
   return (
-    <button
-      aria-pressed={selected}
-      className={`capability-card selectable ${selected ? 'selected' : ''}`}
-      onClick={() => onToggle?.(capability.id)}
-      type="button"
-    >
-      {content}
-    </button>
+    <article className={`capability-card selectable ${selected ? 'selected' : ''}`}>
+      <button
+        aria-pressed={selected}
+        className="capability-toggle"
+        onClick={() => onToggle?.(capability.id)}
+        type="button"
+      >
+        {content}
+      </button>
+      {selected && executionPolicy !== undefined && onProfileChange !== undefined ? (
+        <CapabilityExecutionControl
+          capability={capability}
+          onProfileChange={onProfileChange}
+          policy={executionPolicy}
+          selectedProfileId={selectedProfileId}
+        />
+      ) : null}
+    </article>
   );
 };
 
@@ -439,6 +604,11 @@ const DraftOverview = ({
         <strong>{String(selectedItems.length)}</strong>
         <span>capabilities selected</span>
       </div>
+      <div className="overview-execution">
+        <small>Agent runtime</small>
+        <strong>Local VS Code agent</strong>
+        <span>{executionPolicyPresentation[draft.executionPolicy].label} capability execution</span>
+      </div>
       <div className="overview-stack">
         {selectedItems.length === 0 ? (
           <p>Select capabilities to shape this composition.</p>
@@ -470,8 +640,10 @@ const AuthoringForm = ({
   formError,
   onChange,
   onToggleCapability,
+  onProfileChange,
   onApplyPreset,
   onSubmit,
+  policyIssues,
 }: {
   readonly draft: AgentDraft;
   readonly catalog: CapabilityCatalogResponse | undefined;
@@ -480,8 +652,10 @@ const AuthoringForm = ({
   readonly formError: UiError | undefined;
   readonly onChange: (patch: Partial<AgentDraft>) => void;
   readonly onToggleCapability: (id: string) => void;
+  readonly onProfileChange: (capabilityId: string, profileId: string | undefined) => void;
   readonly onApplyPreset: () => void;
   readonly onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  readonly policyIssues: readonly string[];
 }): ReactNode => (
   <form className="authoring-form" onSubmit={onSubmit}>
     <section className="form-section identity-section">
@@ -576,13 +750,70 @@ const AuthoringForm = ({
             <CapabilityCard
               capability={capability}
               key={capability.id}
+              executionPolicy={draft.executionPolicy}
+              onProfileChange={onProfileChange}
               onToggle={onToggleCapability}
               selectable
               selected={draft.selectedCapabilityIds.includes(capability.id)}
+              selectedProfileId={draft.profileSelections[capability.id]}
             />
           ))}
         </div>
       ) : null}
+    </section>
+
+    <section className="form-section execution-policy-section">
+      <div className="section-heading">
+        <div>
+          <span className="section-number">03</span>
+          <div>
+            <h2>Choose capability execution</h2>
+            <p>The agent stays local. This policy controls where its capabilities execute.</p>
+          </div>
+        </div>
+      </div>
+      <div className="runtime-axis-note">
+        <Icon name="terminal" size={18} />
+        <div>
+          <strong>Agent runtime · Local VS Code</strong>
+          <span>Capabilities may independently resolve to local, remote, or hybrid execution.</span>
+        </div>
+      </div>
+      <fieldset aria-label="Execution policy" className="execution-policy-grid">
+        {(['automatic', 'local-only', 'custom'] as const).map((policy) => {
+          const presentation = executionPolicyPresentation[policy];
+          return (
+            <label className={draft.executionPolicy === policy ? 'selected' : ''} key={policy}>
+              <input
+                checked={draft.executionPolicy === policy}
+                name="execution-policy"
+                onChange={() => onChange({ executionPolicy: policy })}
+                type="radio"
+              />
+              <span>
+                <strong>{presentation.label}</strong>
+                <small>{presentation.description}</small>
+              </span>
+            </label>
+          );
+        })}
+      </fieldset>
+      <div className="policy-boundary">
+        <strong>Execution and mutation stay separate.</strong>
+        <span>
+          Every explicit profile identifies both its Local, Remote, or Hybrid topology and its
+          Read-only or Mutating posture.
+        </span>
+      </div>
+      {policyIssues.length === 0 ? null : (
+        <ErrorNotice
+          error={{
+            summary: 'The selected capabilities cannot satisfy Local only.',
+            issues: policyIssues,
+          }}
+          title="Local only is incompatible"
+        />
+      )}
     </section>
 
     {formError === undefined ? null : (
@@ -594,10 +825,17 @@ const AuthoringForm = ({
         <Icon name="bolt" size={20} />
         <div>
           <strong>Build a deterministic composition</strong>
-          <span>Validate · resolve · bind · generate</span>
+          <span>
+            {executionPolicyPresentation[draft.executionPolicy].label} · validate · resolve · bind ·
+            generate
+          </span>
         </div>
       </div>
-      <button className="button primary build-button" disabled={building} type="submit">
+      <button
+        className="button primary build-button"
+        disabled={building || policyIssues.length > 0}
+        type="submit"
+      >
         {building ? (
           <>
             <span className="spinner" />
@@ -631,7 +869,9 @@ const CapabilityResultRow = ({
         <div className={`binding-icon ${capability.binding.mode}`}>{mode.icon}</div>
         <div>
           <strong>{capability.displayName}</strong>
-          <code>{capability.id}</code>
+          <code>
+            {capability.id} · v{capability.resolvedVersion}
+          </code>
           <span className="compatibility-label">
             <Icon name="check" size={11} />
             VS Code compatible
@@ -639,18 +879,31 @@ const CapabilityResultRow = ({
         </div>
       </div>
       <div className="result-cell">
-        <small>Version</small>
-        <strong>{capability.resolvedVersion}</strong>
+        <small>Execution</small>
+        <strong className={`resolved-posture ${capability.profile.mutation}`}>
+          {mode.label} · {mutationPresentation[capability.profile.mutation]}
+        </strong>
       </div>
       <div className="result-cell">
-        <small>Profile</small>
-        <strong>{capability.profile.id}</strong>
+        <small>Resolved profile</small>
+        <code>{capability.profile.id}</code>
       </div>
       <div className="result-cell">
-        <small>Binding</small>
-        <span className={`mode-chip ${capability.binding.mode}`}>{mode.label}</span>
+        <small>Resolved binding</small>
+        <code>{capability.binding.id}</code>
+        <span>{capability.binding.interface}</span>
       </div>
       <ReadinessChip state={capability.readiness.state} />
+      <div className="readiness-summary">
+        <span>
+          <strong>Setup</strong>
+          {capability.readiness.setupSummary}
+        </span>
+        <span>
+          <strong>Ready when</strong>
+          {capability.readiness.summary}
+        </span>
+      </div>
       {capability.configuration.endpointRequired ||
       capability.configuration.requiredNames.length > 0 ? (
         <div className="configuration-strip">
@@ -669,35 +922,49 @@ const CapabilityResultRow = ({
   );
 };
 
-const ExecutionSummary = ({ result }: { readonly result: BuildAgentResult }): ReactNode => (
-  <section className="result-section">
-    <div className="result-section-heading">
-      <div>
-        <span className="eyebrow">Execution</span>
-        <h2>Resolved binding topology</h2>
+const ExecutionSummary = ({ result }: { readonly result: BuildAgentResult }): ReactNode => {
+  const shape = executionShapeLabel(result);
+  return (
+    <section className="result-section">
+      <div className="result-section-heading">
+        <div>
+          <span className="eyebrow">Execution</span>
+          <h2>Local Agent · {shape}</h2>
+        </div>
+        <p>Agent runtime and capability execution are independent axes.</p>
       </div>
-      <p>Actual binding modes selected by Agent Kit for this VS Code build.</p>
-    </div>
-    <div className="execution-grid">
-      {(['local', 'remote', 'hybrid'] as const).map((mode) => (
-        <article className={`execution-card ${mode}`} key={mode}>
-          <div className={`binding-icon ${mode}`}>{modePresentation[mode].icon}</div>
-          <div>
-            <strong>{String(result.execution[mode])}</strong>
-            <span>{modePresentation[mode].label}</span>
-          </div>
-          <small>
-            {mode === 'local'
-              ? 'Runs on this environment'
-              : mode === 'remote'
-                ? 'Connects to a provider endpoint'
-                : 'Local process with provider access'}
-          </small>
-        </article>
-      ))}
-    </div>
-  </section>
-);
+      <div className="runtime-summary">
+        <div>
+          <small>Agent runtime</small>
+          <strong>Local · VS Code</strong>
+        </div>
+        <div>
+          <small>Capability execution</small>
+          <strong>{shape}</strong>
+        </div>
+        <span>One remote capability does not make the whole agent remote.</span>
+      </div>
+      <div className="execution-grid">
+        {(['local', 'remote', 'hybrid'] as const).map((mode) => (
+          <article className={`execution-card ${mode}`} key={mode}>
+            <div className={`binding-icon ${mode}`}>{modePresentation[mode].icon}</div>
+            <div>
+              <strong>{String(result.execution[mode])}</strong>
+              <span>{modePresentation[mode].label}</span>
+            </div>
+            <small>
+              {mode === 'local'
+                ? 'Runs on this environment'
+                : mode === 'remote'
+                  ? 'Connects to a provider endpoint'
+                  : 'Local process with provider access'}
+            </small>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+};
 
 const ArtifactPreview = ({
   artifacts,
@@ -828,6 +1095,7 @@ const BuildResultView = ({
             <code>{result.agent.id}</code>
             <span>v{result.agent.version}</span>
             <span>{String(result.capabilities.length)} capabilities</span>
+            <span>Local Agent · {executionShapeLabel(result)}</span>
           </div>
           <p>{setupMessage}</p>
           <small>
@@ -896,7 +1164,7 @@ const BuildResultView = ({
             <h2>Realize this build in a specific environment.</h2>
             <p>
               Prepare will install or connect bindings, collect environment-owned configuration, and
-              create an Agent Instance. It is intentionally not implemented in H3.
+              create an Agent Instance. It is intentionally outside this Builder task.
             </p>
           </div>
         </div>
@@ -914,8 +1182,10 @@ const BuilderPage = ({
   draft,
   onDraftChange,
   onToggleCapability,
+  onProfileChange,
   onApplyPreset,
   onSubmit,
+  policyIssues,
   building,
   buildError,
   buildResult,
@@ -926,8 +1196,10 @@ const BuilderPage = ({
   readonly draft: AgentDraft;
   readonly onDraftChange: (patch: Partial<AgentDraft>) => void;
   readonly onToggleCapability: (id: string) => void;
+  readonly onProfileChange: (capabilityId: string, profileId: string | undefined) => void;
   readonly onApplyPreset: () => void;
   readonly onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  readonly policyIssues: readonly string[];
   readonly building: boolean;
   readonly buildError: UiError | undefined;
   readonly buildResult: BuildAgentResult | undefined;
@@ -954,8 +1226,10 @@ const BuilderPage = ({
           formError={buildError}
           onApplyPreset={onApplyPreset}
           onChange={onDraftChange}
+          onProfileChange={onProfileChange}
           onSubmit={onSubmit}
           onToggleCapability={onToggleCapability}
+          policyIssues={policyIssues}
         />
         <DraftOverview catalog={catalog} draft={draft} />
       </div>
@@ -1015,7 +1289,20 @@ export const App = (): ReactNode => {
     [],
   );
 
-  const selectedSet = useMemo(() => new Set(draft.selectedCapabilityIds), [draft]);
+  const selectedSet = useMemo(
+    () => new Set(draft.selectedCapabilityIds),
+    [draft.selectedCapabilityIds],
+  );
+  const selectionPlan = useMemo(
+    () =>
+      planCapabilitySelections(
+        draft.selectedCapabilityIds,
+        draft.executionPolicy,
+        draft.profileSelections,
+        catalog,
+      ),
+    [catalog, draft.executionPolicy, draft.profileSelections, draft.selectedCapabilityIds],
+  );
 
   const changeDraft = (patch: Partial<AgentDraft>): void => {
     setBuildError(undefined);
@@ -1039,7 +1326,20 @@ export const App = (): ReactNode => {
     changeDraft({ selectedCapabilityIds: ordered });
   };
 
+  const changeProfile = (capabilityId: string, profileId: string | undefined): void => {
+    const profileSelections: Record<string, string> = { ...draft.profileSelections };
+    if (profileId === undefined) delete profileSelections[capabilityId];
+    else profileSelections[capabilityId] = profileId;
+    changeDraft({ profileSelections });
+  };
+
   const applyPreset = (): void => {
+    const profileSelections: Record<string, string> = {};
+    for (const selection of developerOptimizationPreset.capabilities) {
+      if ('profile' in selection && selection.profile !== undefined) {
+        profileSelections[selection.id] = selection.profile;
+      }
+    }
     setIdEdited(true);
     setBuildError(undefined);
     setBuildResult(undefined);
@@ -1049,6 +1349,8 @@ export const App = (): ReactNode => {
       version: developerOptimizationPreset.version,
       instructions: developerOptimizationPreset.instructions,
       selectedCapabilityIds: developerOptimizationPreset.capabilities.map(({ id }) => id),
+      executionPolicy: 'custom',
+      profileSelections,
     });
   };
 
@@ -1059,6 +1361,13 @@ export const App = (): ReactNode => {
     if (draft.id.trim().length === 0) missing.push('Enter or derive an agent ID.');
     if (draft.instructions.trim().length === 0) missing.push('Add agent instructions.');
     if (draft.selectedCapabilityIds.length === 0) missing.push('Select at least one capability.');
+    if (selectionPlan.issues.length > 0) {
+      setBuildError({
+        summary: 'The execution policy cannot be applied to this composition.',
+        issues: selectionPlan.issues,
+      });
+      return;
+    }
     if (missing.length > 0) {
       setBuildError({
         code: 'INVALID_AGENT_DEFINITION',
@@ -1074,7 +1383,7 @@ export const App = (): ReactNode => {
       name: draft.name,
       version: draft.version,
       instructions: draft.instructions,
-      capabilities: draft.selectedCapabilityIds.map((id) => ({ id })),
+      capabilities: [...selectionPlan.selections],
     };
     buildAbort.current?.abort();
     const controller = new AbortController();
@@ -1118,8 +1427,10 @@ export const App = (): ReactNode => {
           onApplyPreset={applyPreset}
           onDraftChange={changeDraft}
           onEdit={() => setBuildResult(undefined)}
+          onProfileChange={changeProfile}
           onSubmit={submit}
           onToggleCapability={toggleCapability}
+          policyIssues={selectionPlan.issues}
         />
       )}
     </ProductShell>

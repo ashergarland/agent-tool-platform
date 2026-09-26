@@ -4,6 +4,12 @@ import { developerOptimizationPreset } from '../src/shared/developer-optimizatio
 
 describe('Developer Optimization Agent Builder acceptance', () => {
   it('builds all seven capabilities deterministically through Registry and Agent Kit', async () => {
+    expect(developerOptimizationPreset.capabilities).toEqual(
+      expect.arrayContaining([
+        { id: 'vision', profile: 'local-package' },
+        { id: 'azure', profile: 'hosted-read-only' },
+      ]),
+    );
     const service = createBuilderService();
     const first = await service.buildAgent(developerOptimizationPreset);
     const second = await service.buildAgent(developerOptimizationPreset);
@@ -26,6 +32,7 @@ describe('Developer Optimization Agent Builder acceptance', () => {
     ]);
     expect(first.capabilities.every(({ binding }) => binding.mode.length > 0)).toBe(true);
     expect(first.capabilities.every(({ readiness }) => readiness.state.length > 0)).toBe(true);
+    expect(first.execution).toEqual({ local: 6, remote: 1, hybrid: 0 });
 
     const lock = first.artifacts.find(({ kind }) => kind === 'lock');
     const agent = first.artifacts.find(({ kind }) => kind === 'vscode-agent');
@@ -86,6 +93,10 @@ describe('Developer Optimization Agent Builder acceptance', () => {
           },
         ],
       },
+    });
+    expect(first.capabilities.find(({ id }) => id === 'vision')).toMatchObject({
+      profile: { id: 'local-package', mutation: 'mutating' },
+      binding: { mode: 'local' },
     });
     expect(mcp?.content).not.toContain('actual-secret');
     expect(first.readiness.setupRequired).toBe(7);
