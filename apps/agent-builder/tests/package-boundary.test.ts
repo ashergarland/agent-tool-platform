@@ -56,4 +56,21 @@ describe('Builder public package boundary', () => {
     const declaration = realpathSync.native(resolution?.resolvedFileName ?? '');
     expect(declaration).toBe(expectedDeclaration);
   });
+
+  it('keeps preparation behind public APIs without installer, write, proxy, or persistence code', () => {
+    const productionSources = parsedConfig.fileNames
+      .filter((path) => path.includes(`${resolve(appRoot, 'src')}`))
+      .map((path) => ts.sys.readFile(path) ?? '')
+      .join('\n');
+    const serverSources = parsedConfig.fileNames
+      .filter((path) => path.includes(`${resolve(appRoot, 'src', 'server')}`))
+      .map((path) => ts.sys.readFile(path) ?? '')
+      .join('\n');
+
+    expect(productionSources).not.toMatch(/packages[\\/]agent-kit[\\/]src/u);
+    expect(serverSources).not.toMatch(/node:child_process|node:sqlite|npm\s+(?:install|link)/u);
+    expect(serverSources).not.toMatch(/\b(?:appendFile|mkdir|writeFile)\b/u);
+    expect(serverSources).not.toMatch(/\bfetch\s*\(/u);
+    expect(serverSources).not.toContain('/api/proxy');
+  });
 });

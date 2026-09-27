@@ -5,7 +5,10 @@ import type {
   BuilderErrorCode,
   BuilderErrorResponse,
   CapabilityCatalogResponse,
+  PrepareAgentRequest,
+  PrepareAgentResult,
 } from '../shared/contracts.js';
+import { LOCAL_VSCODE_ENVIRONMENT_ID } from '../shared/contracts.js';
 
 export class BuilderApiError extends Error {
   public override readonly name = 'BuilderApiError';
@@ -44,24 +47,24 @@ const isErrorResponse = (value: unknown): value is BuilderErrorResponse => {
   );
 };
 
-const responseJson = async <T>(response: Response): Promise<T> => {
+const responseJson = async <T>(
+  response: Response,
+  fallbackCode: BuilderErrorCode = 'BUILD_FAILED',
+): Promise<T> => {
   let body: unknown;
   try {
     body = await response.json();
   } catch (error) {
-    throw new BuilderApiError(
-      'BUILD_FAILED',
-      'Agent Builder returned an unreadable response.',
-      [],
-      { cause: error },
-    );
+    throw new BuilderApiError(fallbackCode, 'Agent Builder returned an unreadable response.', [], {
+      cause: error,
+    });
   }
   if (!response.ok) {
     if (isErrorResponse(body)) {
       throw new BuilderApiError(body.error.code, body.error.summary, body.error.issues);
     }
     throw new BuilderApiError(
-      'BUILD_FAILED',
+      fallbackCode,
       `Agent Builder request failed with status ${String(response.status)}.`,
       [],
     );
@@ -103,5 +106,29 @@ export const buildAgent = async (
       body: JSON.stringify(request),
       ...(signal === undefined ? {} : { signal }),
     }),
+  );
+};
+
+export const prepareAgent = async (
+  definition: AgentDefinition,
+  expectedLockDigest: string,
+  signal?: AbortSignal,
+): Promise<PrepareAgentResult> => {
+  const request: PrepareAgentRequest = {
+    definition,
+    expectedLockDigest,
+    environmentId: LOCAL_VSCODE_ENVIRONMENT_ID,
+  };
+  return responseJson<PrepareAgentResult>(
+    await fetchBuilder('/api/prepare', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+      ...(signal === undefined ? {} : { signal }),
+    }),
+    'PREPARATION_FAILED',
   );
 };

@@ -3,9 +3,13 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { extname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ViteDevServer } from 'vite';
-import type { BuildAgentRequest, BuilderHealthResponse } from '../shared/contracts.js';
+import {
+  LOCAL_VSCODE_ENVIRONMENT_ID,
+  type BuildAgentRequest,
+  type BuilderHealthResponse,
+} from '../shared/contracts.js';
 import { BuilderServiceError, errorResponse } from './errors.js';
-import { createBuilderService, type BuilderService } from './service.js';
+import { createBuilderService, type BuilderPrepareInput, type BuilderService } from './service.js';
 
 export const BUILDER_HOST = '127.0.0.1';
 export const DEFAULT_BUILDER_PORT = 4173;
@@ -101,7 +105,7 @@ const readJsonBody = async (request: IncomingMessage): Promise<unknown> => {
   if (contentType !== 'application/json') {
     throw new BuilderServiceError(
       'UNSUPPORTED_MEDIA_TYPE',
-      'Build requests must use application/json.',
+      'Builder requests must use application/json.',
       [],
       415,
     );
@@ -122,7 +126,7 @@ const readJsonBody = async (request: IncomingMessage): Promise<unknown> => {
   if (tooLarge) {
     throw new BuilderServiceError(
       'PAYLOAD_TOO_LARGE',
-      `Build requests must not exceed ${String(MAX_REQUEST_BYTES)} bytes.`,
+      `Builder requests must not exceed ${String(MAX_REQUEST_BYTES)} bytes.`,
       [],
       413,
     );
@@ -161,6 +165,58 @@ const requestDefinition = (body: unknown): unknown => {
   return (body as BuildAgentRequest).definition;
 };
 
+const sha256DigestPattern = /^sha256:[0-9a-f]{64}$/u;
+
+const requestPreparation = (body: unknown): BuilderPrepareInput => {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    throw new BuilderServiceError(
+      'INVALID_REQUEST',
+      'The request body must identify one displayed Build and preparation environment.',
+      [],
+      400,
+    );
+  }
+  const fields = body as Readonly<Record<string, unknown>>;
+  const keys = Object.keys(fields);
+  if (
+    keys.length !== 3 ||
+    !Object.hasOwn(fields, 'definition') ||
+    !Object.hasOwn(fields, 'expectedLockDigest') ||
+    !Object.hasOwn(fields, 'environmentId')
+  ) {
+    throw new BuilderServiceError(
+      'INVALID_REQUEST',
+      'Prepare requests must contain only definition, expectedLockDigest, and environmentId.',
+      [],
+      400,
+    );
+  }
+  if (
+    typeof fields['expectedLockDigest'] !== 'string' ||
+    !sha256DigestPattern.test(fields['expectedLockDigest'])
+  ) {
+    throw new BuilderServiceError(
+      'INVALID_REQUEST',
+      'Prepare requests must contain a valid expected Build lock digest.',
+      [],
+      400,
+    );
+  }
+  if (fields['environmentId'] !== LOCAL_VSCODE_ENVIRONMENT_ID) {
+    throw new BuilderServiceError(
+      'INVALID_REQUEST',
+      'Prepare requests must target the local VS Code Builder environment.',
+      [],
+      400,
+    );
+  }
+  return {
+    definition: fields['definition'],
+    expectedLockDigest: fields['expectedLockDigest'],
+    environmentId: fields['environmentId'],
+  };
+};
+
 const handleApiRequest = async (
   request: IncomingMessage,
   response: ServerResponse,
@@ -190,6 +246,19 @@ const handleApiRequest = async (
     }
     const definition = requestDefinition(await readJsonBody(request));
     sendJson(response, 200, await service.buildAgent(definition), production);
+    return true;
+  }
+  if (requestUrl.pathname === '/api/prepare' && request.method === 'POST') {
+    if (!hasAllowedOrigin(request)) {
+      throw new BuilderServiceError(
+        'INVALID_REQUEST',
+        'The request origin is not allowed.',
+        [],
+        403,
+      );
+    }
+    const preparation = requestPreparation(await readJsonBody(request));
+    sendJson(response, 200, await service.prepareAgent(preparation), production);
     return true;
   }
 
@@ -375,11 +444,7 @@ export const createBuilderApplication = async (
               500,
               { cause: error },
             );
-      const diagnostic =
-        serviceError.cause instanceof Error
-          ? `${serviceError.cause.name}: ${serviceError.cause.message}`
-          : serviceError.message;
-      logger.error(`[agent-builder] ${serviceError.code}: ${diagnostic}`);
+      logger.error(`[agent-builder] ${serviceError.code}: ${serviceError.message}`);
       if (!response.headersSent) {
         sendJson(response, serviceError.status, errorResponse(serviceError), production);
       } else if (!response.writableEnded) {

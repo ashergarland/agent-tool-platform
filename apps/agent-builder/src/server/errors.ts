@@ -6,7 +6,7 @@ const MAX_ISSUES = 20;
 const MAX_ISSUE_LENGTH = 300;
 type BuildAgentKitErrorCode = Extract<AgentKitErrorCode, BuilderErrorCode>;
 
-const buildAgentKitErrorCodes = new Set<AgentKitErrorCode>([
+const builderAgentKitErrorCodes = new Set<AgentKitErrorCode>([
   'INVALID_AGENT_DEFINITION',
   'INVALID_REGISTRY_RECORD',
   'CAPABILITY_NOT_FOUND',
@@ -18,6 +18,10 @@ const buildAgentKitErrorCodes = new Set<AgentKitErrorCode>([
   'INVALID_ADAPTER_OUTPUT',
   'INVALID_READINESS_INPUT',
   'INVALID_INSTANCE_IDENTITY',
+  'INVALID_AGENT_INSTANCE',
+  'INVALID_PREPARATION_INPUT',
+  'INVALID_PREPARATION_RESULT',
+  'PREPARATION_FAILED',
 ]);
 
 const compact = (value: string): string => value.replace(/\s+/gu, ' ').trim();
@@ -29,7 +33,7 @@ const boundedIssues = (issues: readonly string[]): readonly string[] =>
   issues.slice(0, MAX_ISSUES).map((issue) => bound(compact(issue)));
 
 const isBuildAgentKitErrorCode = (code: AgentKitErrorCode): code is BuildAgentKitErrorCode =>
-  buildAgentKitErrorCodes.has(code);
+  builderAgentKitErrorCodes.has(code);
 
 export class BuilderServiceError extends Error {
   public override readonly name = 'BuilderServiceError';
@@ -45,20 +49,22 @@ export class BuilderServiceError extends Error {
   }
 }
 
-const statusForAgentKitError = (code: AgentKitErrorCode): number =>
-  code === 'INVALID_REGISTRY_RECORD' ? 503 : 400;
+const statusForAgentKitError = (code: AgentKitErrorCode): number => {
+  if (code === 'INVALID_REGISTRY_RECORD') return 503;
+  if (code === 'PREPARATION_FAILED') return 502;
+  if (code === 'INVALID_PREPARATION_RESULT') return 500;
+  return 400;
+};
 
-export const asBuildServiceError = (error: unknown): BuilderServiceError => {
+const asAgentKitServiceError = (
+  error: unknown,
+  fallbackCode: 'BUILD_FAILED' | 'PREPARATION_FAILED',
+  fallbackSummary: string,
+): BuilderServiceError => {
   if (error instanceof BuilderServiceError) return error;
   if (error instanceof AgentKitError) {
     if (!isBuildAgentKitErrorCode(error.code)) {
-      return new BuilderServiceError(
-        'BUILD_FAILED',
-        'The agent could not be built. Try again or inspect the local server diagnostics.',
-        [],
-        500,
-        { cause: error },
-      );
+      return new BuilderServiceError(fallbackCode, fallbackSummary, [], 500, { cause: error });
     }
     return new BuilderServiceError(
       error.code,
@@ -77,14 +83,22 @@ export const asBuildServiceError = (error: unknown): BuilderServiceError => {
       { cause: error },
     );
   }
-  return new BuilderServiceError(
+  return new BuilderServiceError(fallbackCode, fallbackSummary, [], 500, { cause: error });
+};
+
+export const asBuildServiceError = (error: unknown): BuilderServiceError =>
+  asAgentKitServiceError(
+    error,
     'BUILD_FAILED',
     'The agent could not be built. Try again or inspect the local server diagnostics.',
-    [],
-    500,
-    { cause: error },
   );
-};
+
+export const asPreparationServiceError = (error: unknown): BuilderServiceError =>
+  asAgentKitServiceError(
+    error,
+    'PREPARATION_FAILED',
+    'The agent could not be prepared. Try again or inspect the local server diagnostics.',
+  );
 
 export const asRegistryServiceError = (error: unknown): BuilderServiceError => {
   const converted = asBuildServiceError(error);

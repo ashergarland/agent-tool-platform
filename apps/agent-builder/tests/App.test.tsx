@@ -5,7 +5,13 @@ import userEvent from '@testing-library/user-event';
 import type { AgentDefinition } from '@agent-tool-platform/agent-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App, deriveAgentId } from '../src/client/App.js';
-import { buildResultFixture, catalogFixture, jsonResponse } from './fixtures.js';
+import { LOCAL_VSCODE_ENVIRONMENT_ID } from '../src/shared/contracts.js';
+import {
+  buildResultFixture,
+  catalogFixture,
+  jsonResponse,
+  prepareResultFixture,
+} from './fixtures.js';
 
 afterEach(() => {
   cleanup();
@@ -23,6 +29,25 @@ const postedDefinition = (calls: readonly (readonly unknown[])[]): AgentDefiniti
   const body = (buildCall?.[1] as RequestInit | undefined)?.body;
   if (typeof body !== 'string') throw new Error('Expected a JSON Builder request body.');
   return (JSON.parse(body) as { readonly definition: AgentDefinition }).definition;
+};
+
+const postedPreparation = (
+  calls: readonly (readonly unknown[])[],
+): {
+  readonly definition: AgentDefinition;
+  readonly expectedLockDigest: string;
+  readonly environmentId: string;
+} => {
+  const prepareCall = calls.find((call) =>
+    requestUrl(call[0] as RequestInfo | URL).endsWith('/api/prepare'),
+  );
+  const body = (prepareCall?.[1] as RequestInit | undefined)?.body;
+  if (typeof body !== 'string') throw new Error('Expected a JSON Prepare request body.');
+  return JSON.parse(body) as {
+    readonly definition: AgentDefinition;
+    readonly expectedLockDigest: string;
+    readonly environmentId: string;
+  };
 };
 
 describe('Agent Builder UI', () => {
@@ -249,14 +274,108 @@ describe('Agent Builder UI', () => {
     expect(screen.getByText('7 MCP servers configured')).toBeTruthy();
     expect(screen.getByText('.github/agents/developer-optimization.agent.md')).toBeTruthy();
     expect(screen.getByText('{"kind":"agent-lock"}')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Prepare · coming next/i })).toHaveProperty(
-      'disabled',
-      true,
-    );
+    expect(screen.getByRole('button', { name: 'Prepare agent' })).toHaveProperty('disabled', false);
     expect(fetchMock.mock.calls.some(([input]) => requestUrl(input).includes('prepare'))).toBe(
       false,
     );
   });
+
+  it('prepares the exact displayed Build and presents a truthful NEEDS SETUP Agent Instance', async () => {
+    let resolvePrepare: ((response: Response) => void) | undefined;
+    const pendingPrepare = new Promise<Response>((resolve) => {
+      resolvePrepare = resolve;
+    });
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = requestUrl(input);
+        if (url.endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
+        if (url.endsWith('/api/build') && init?.method === 'POST') {
+          return jsonResponse(buildResultFixture);
+        }
+        if (url.endsWith('/api/prepare') && init?.method === 'POST') return pendingPrepare;
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole('button', { name: /Developer Optimization preset/i });
+    await user.click(screen.getByRole('button', { name: /Developer Optimization preset/i }));
+    await user.click(screen.getByRole('button', { name: 'Build agent' }));
+    await screen.findByText('Build complete');
+    await user.click(screen.getByRole('button', { name: 'Prepare agent' }));
+
+    expect(
+      screen
+        .getAllByRole('button', { name: 'Preparing…' })
+        .every((button) => button.hasAttribute('disabled')),
+    ).toBe(true);
+    expect(screen.getByText('Preparing this exact Build')).toBeTruthy();
+    expect(postedPreparation(fetchMock.mock.calls)).toEqual({
+      definition: postedDefinition(fetchMock.mock.calls),
+      expectedLockDigest: buildResultFixture.lockDigest,
+      environmentId: LOCAL_VSCODE_ENVIRONMENT_ID,
+    });
+
+    resolvePrepare?.(jsonResponse(prepareResultFixture('NEEDS_SETUP')));
+    expect(await screen.findByRole('heading', { name: 'NEEDS SETUP' })).toBeTruthy();
+    expect(screen.getByText(/Agent Instance created/u)).toBeTruthy();
+    expect(screen.getAllByText('Local · VS Code').length).toBeGreaterThan(0);
+    expect(screen.getByText(prepareResultFixture().instance.instanceId)).toBeTruthy();
+    expect(screen.getByText('connector-api-key: configuration reference missing')).toBeTruthy();
+    expect(screen.getByText(/Builder does not collect or persist its value/u)).toBeTruthy();
+    expect(
+      screen.getByText(/locked npm artifact @agent-tool-platform\/vision@0.1.0/u),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Run · unavailable/i })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it.each([
+    ['READY', 'Yes', 'No unresolved actions'],
+    ['UNAVAILABLE', 'No', '5 unresolved actions'],
+  ] as const)(
+    'renders the %s Prepare result without implying Run',
+    async (state, runnable, setup) => {
+      const fetchMock = vi.fn(
+        async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+          const url = requestUrl(input);
+          if (url.endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
+          if (url.endsWith('/api/build') && init?.method === 'POST') {
+            return jsonResponse(buildResultFixture);
+          }
+          if (url.endsWith('/api/prepare') && init?.method === 'POST') {
+            return jsonResponse(prepareResultFixture(state));
+          }
+          throw new Error(`Unexpected request: ${url}`);
+        },
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const user = userEvent.setup();
+      render(<App />);
+
+      await screen.findByRole('button', { name: /Developer Optimization preset/i });
+      await user.click(screen.getByRole('button', { name: /Developer Optimization preset/i }));
+      await user.click(screen.getByRole('button', { name: 'Build agent' }));
+      await screen.findByText('Build complete');
+      await user.click(screen.getByRole('button', { name: 'Prepare agent' }));
+
+      expect(await screen.findByRole('heading', { name: state })).toBeTruthy();
+      const instance = screen.getByText(/Deterministic instance ID/u).closest('section');
+      if (instance === null) throw new Error('Expected an Agent Instance result.');
+      expect(within(instance).getByText(runnable)).toBeTruthy();
+      expect(screen.getByRole('heading', { name: setup })).toBeTruthy();
+      expect(screen.getByText('No execution has occurred.')).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Run · unavailable/i })).toHaveProperty(
+        'disabled',
+        true,
+      );
+    },
+  );
 
   it('preserves structured Agent Kit build errors without stack traces', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {

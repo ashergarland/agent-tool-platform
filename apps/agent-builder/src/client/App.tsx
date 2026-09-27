@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import type { AgentDefinition } from '@agent-tool-platform/agent-kit';
+import type { AgentDefinition, ReadinessRequirement } from '@agent-tool-platform/agent-kit';
 import {
   buildAgent,
   BuilderApiError,
   BuilderUnavailableError,
   getCapabilityCatalog,
+  prepareAgent,
 } from './api.js';
 import type {
   BuildAgentResult,
@@ -13,6 +14,9 @@ import type {
   CapabilityCatalogProfile,
   CapabilityCatalogResponse,
   GeneratedArtifact,
+  PrepareActionResultPresentation,
+  PrepareAgentResult,
+  PreparedInstanceState,
   ReadinessState,
 } from '../shared/contracts.js';
 import { developerOptimizationPreset } from '../shared/developer-optimization-preset.js';
@@ -64,6 +68,26 @@ const readinessPresentation: Readonly<
   },
   'missing-configuration': { label: 'Configuration required', tone: 'attention' },
   'incompatible-binding': { label: 'Incompatible binding', tone: 'danger' },
+};
+
+const instanceStatePresentation: Readonly<
+  Record<PreparedInstanceState, { readonly label: string; readonly tone: string }>
+> = {
+  READY: { label: 'READY', tone: 'positive' },
+  NEEDS_SETUP: { label: 'NEEDS SETUP', tone: 'warning' },
+  UNAVAILABLE: { label: 'UNAVAILABLE', tone: 'danger' },
+};
+
+const preparationStatusPresentation: Readonly<
+  Record<
+    PrepareActionResultPresentation['status'],
+    { readonly label: string; readonly tone: string }
+  >
+> = {
+  success: { label: 'Completed', tone: 'positive' },
+  'already-ready': { label: 'Already ready', tone: 'positive' },
+  'setup-required': { label: 'Setup required', tone: 'warning' },
+  unavailable: { label: 'Unavailable', tone: 'danger' },
 };
 
 const modePresentation = {
@@ -263,7 +287,7 @@ const ProductShell = ({
     <main>{children}</main>
     <footer>
       <span>Agent Tool Platform</span>
-      <span>Build deterministic compositions. Prepare environments next.</span>
+      <span>Build deterministic compositions. Prepare truthful Agent Instances.</span>
     </footer>
   </div>
 );
@@ -561,12 +585,35 @@ const CatalogPage = ({
   </div>
 );
 
-const Lifecycle = ({ built }: { readonly built: boolean }): ReactNode => {
-  const steps = [
-    { number: 1, label: 'Define', state: built ? 'complete' : 'active' },
-    { number: 2, label: 'Build', state: built ? 'complete' : 'next' },
-    { number: 3, label: 'Prepare', state: 'locked' },
-    { number: 4, label: 'Run', state: 'locked' },
+const Lifecycle = ({
+  built,
+  prepared,
+  preparing,
+}: {
+  readonly built: boolean;
+  readonly prepared: boolean;
+  readonly preparing: boolean;
+}): ReactNode => {
+  const steps: readonly {
+    readonly number: number;
+    readonly label: string;
+    readonly state: 'active' | 'complete' | 'locked' | 'next';
+    readonly detail: string | undefined;
+  }[] = [
+    { number: 1, label: 'Define', state: built ? 'complete' : 'active', detail: undefined },
+    { number: 2, label: 'Build', state: built ? 'complete' : 'next', detail: undefined },
+    {
+      number: 3,
+      label: 'Prepare',
+      state: prepared ? 'complete' : built ? 'active' : 'locked',
+      detail: preparing ? 'Preparing…' : built && !prepared ? 'Available' : undefined,
+    },
+    {
+      number: 4,
+      label: 'Agent Instance',
+      state: prepared ? 'active' : 'locked',
+      detail: prepared ? 'Realized' : undefined,
+    },
   ] as const;
   return (
     <ol aria-label="Agent lifecycle" className="lifecycle">
@@ -577,7 +624,8 @@ const Lifecycle = ({ built }: { readonly built: boolean }): ReactNode => {
           </span>
           <span className="step-copy">
             <strong>{step.label}</strong>
-            {step.state === 'locked' ? <small>Coming next</small> : null}
+            {step.detail === undefined && step.state === 'locked' ? <small>Pending</small> : null}
+            {step.detail === undefined ? null : <small>{step.detail}</small>}
           </span>
           {index === steps.length - 1 ? null : <span className="step-line" />}
         </li>
@@ -1071,12 +1119,257 @@ const VsCodeSummary = ({ result }: { readonly result: BuildAgentResult }): React
   );
 };
 
+const readinessRequirementText = (requirement: ReadinessRequirement): string => {
+  switch (requirement.kind) {
+    case 'host-compatibility':
+      return requirement.state === 'compatible'
+        ? 'VS Code host compatibility verified by Build'
+        : `Host incompatible: ${requirement.reasons.join('; ')}`;
+    case 'setup':
+      return `Registry setup note: ${requirement.summary}`;
+    case 'artifact-availability':
+      return `Registry artifact metadata: ${requirement.state} (${requirement.artifactId}); this is not local availability evidence`;
+    case 'configuration':
+      return `${requirement.name}: ${requirement.state === 'available' ? 'configuration reference verified' : 'configuration reference missing'}`;
+    case 'local-artifact':
+      return `Local artifact: ${requirement.state === 'available' ? 'verified' : 'setup required'}`;
+    case 'remote-connection':
+      return `Remote connection: ${requirement.state === 'available' ? 'verified' : 'setup required'}`;
+    case 'provider-prerequisite':
+      return `${requirement.id}: ${requirement.state === 'available' ? 'verified' : 'setup required'} · ${requirement.description}`;
+  }
+};
+
+const setupRequirementText = (result: PrepareActionResultPresentation): string => {
+  const { action } = result;
+  switch (action.concern) {
+    case 'local-artifact':
+      return action.artifact === undefined
+        ? 'The locked local artifact has not been verified in this environment.'
+        : `The locked ${action.artifact.kind} artifact ${action.artifact.identifier}@${action.artifact.version} has not been verified in this environment.`;
+    case 'configuration':
+      return `Provide the named configuration reference ${action.configurationName ?? 'required by this binding'} to VS Code. Builder does not collect or persist its value.`;
+    case 'remote-connection':
+      return 'Verify that the configured remote capability connection is reachable and authorized.';
+    case 'provider-prerequisite':
+      return `Verify provider prerequisite ${action.prerequisiteId ?? 'required by this binding'} without asking Builder to provision or mutate the provider.`;
+    case 'host-integration':
+      return 'Materialize the generated VS Code agent and MCP files through a future bounded workspace flow. Builder has not written them.';
+  }
+};
+
+const PreparationStatusChip = ({
+  status,
+}: {
+  readonly status: PrepareActionResultPresentation['status'];
+}): ReactNode => {
+  const presentation = preparationStatusPresentation[status];
+  return <span className={`status-chip ${presentation.tone}`}>{presentation.label}</span>;
+};
+
+const AgentInstanceView = ({ result }: { readonly result: PrepareAgentResult }): ReactNode => {
+  const state = instanceStatePresentation[result.instance.state];
+  const actionStatus = new Map(
+    result.preparation.actionResults.map(({ action, status }) => [action.actionId, status]),
+  );
+  return (
+    <>
+      <section className={`instance-hero ${state.tone}`}>
+        <div>
+          <span className="eyebrow">
+            Agent Instance {result.preparation.disposition === 'created' ? 'created' : 'reconciled'}
+          </span>
+          <h2>{state.label}</h2>
+          <p>
+            Prepare realized the canonical Build for this environment. This is readiness state, not
+            runtime activity or health.
+          </p>
+        </div>
+        <div className="instance-facts">
+          <div>
+            <small>Environment</small>
+            <strong>{result.environment.label}</strong>
+            <code>{result.environment.id}</code>
+          </div>
+          <div>
+            <small>Runnable</small>
+            <strong>{result.preparation.runnable ? 'Yes' : 'No'}</strong>
+          </div>
+          <div>
+            <small>Disposition</small>
+            <strong>{result.preparation.disposition === 'created' ? 'Created' : 'Updated'}</strong>
+          </div>
+        </div>
+        <div className="instance-id">
+          <small>Deterministic instance ID</small>
+          <code>{result.instance.instanceId}</code>
+        </div>
+      </section>
+
+      <section className="result-section preparation-summary">
+        <div className="result-section-heading">
+          <div>
+            <span className="eyebrow">Preparation</span>
+            <h2>Environment readiness</h2>
+          </div>
+          <p>
+            Positive states come only from supplied evidence or successful driver actions. Published
+            metadata alone is not readiness.
+          </p>
+        </div>
+        <div className="preparation-metrics">
+          <div className="positive">
+            <strong>{String(result.preparation.summary.ready)}</strong>
+            <span>ready actions</span>
+          </div>
+          <div className="warning">
+            <strong>{String(result.preparation.summary.setupRequired)}</strong>
+            <span>setup required</span>
+          </div>
+          <div className="danger">
+            <strong>{String(result.preparation.summary.unavailable)}</strong>
+            <span>unavailable</span>
+          </div>
+          <div>
+            <PreparationStatusChip status={result.preparation.hostIntegration.status} />
+            <span>VS Code host integration</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="result-section prepared-capabilities">
+        <div className="result-section-heading">
+          <div>
+            <span className="eyebrow">Capabilities</span>
+            <h2>Prepared binding readiness</h2>
+          </div>
+          <p>Prepare preserves the exact Local, Remote, and Hybrid bindings selected by Build.</p>
+        </div>
+        <div className="prepared-capability-list">
+          {result.readiness.capabilities.map((capability) => (
+            <article className="prepared-capability" key={`${capability.id}-${capability.profile}`}>
+              <div className="prepared-capability-heading">
+                <div className={`binding-icon ${capability.bindingMode}`}>
+                  {modePresentation[capability.bindingMode].icon}
+                </div>
+                <div>
+                  <strong>{capability.displayName}</strong>
+                  <code>
+                    {capability.id} · v{capability.version} · {capability.profile}
+                  </code>
+                </div>
+              </div>
+              <div className="prepared-capability-states">
+                <ReadinessChip state={capability.state} />
+                <span
+                  className={`instance-binding-state ${capability.instanceState.toLowerCase()}`}
+                >
+                  {instanceStatePresentation[capability.instanceState].label}
+                </span>
+              </div>
+              <ul>
+                {capability.requirements.map((requirement, index) => (
+                  <li key={`${requirement.kind}-${String(index)}`}>
+                    {readinessRequirementText(requirement)}
+                  </li>
+                ))}
+              </ul>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="result-section setup-requirements">
+        <div className="result-section-heading">
+          <div>
+            <span className="eyebrow">Required setup</span>
+            <h2>
+              {result.setupRequirements.length === 0
+                ? 'No unresolved actions'
+                : `${String(result.setupRequirements.length)} unresolved ${result.setupRequirements.length === 1 ? 'action' : 'actions'}`}
+            </h2>
+          </div>
+          <p>
+            Setup requirements are H7 action results. They do not contain credential values,
+            commands, or arbitrary filesystem targets.
+          </p>
+        </div>
+        {result.setupRequirements.length === 0 ? (
+          <div className="setup-complete">
+            <Icon name="check" size={18} />
+            This environment satisfies the current preparation plan.
+          </div>
+        ) : (
+          <div className="setup-list">
+            {result.setupRequirements.map((requirement) => (
+              <article key={requirement.action.actionId}>
+                <div>
+                  <strong>{requirement.action.title}</strong>
+                  <p>{setupRequirementText(requirement)}</p>
+                  <code>{requirement.action.actionId}</code>
+                </div>
+                <PreparationStatusChip status={requirement.status} />
+              </article>
+            ))}
+          </div>
+        )}
+        <details className="preparation-plan">
+          <summary>
+            Preparation plan · {String(result.plan.actions.length)}{' '}
+            {result.plan.actions.length === 1 ? 'action' : 'actions'}
+          </summary>
+          <div>
+            {result.plan.actions.map((action) => {
+              const status = actionStatus.get(action.actionId);
+              return (
+                <div key={action.actionId}>
+                  <span>
+                    <strong>{action.title}</strong>
+                    <small>{action.concern.replaceAll('-', ' ')}</small>
+                  </span>
+                  {status === undefined ? null : <PreparationStatusChip status={status} />}
+                </div>
+              );
+            })}
+          </div>
+        </details>
+      </section>
+
+      <section className="next-step run-boundary">
+        <div>
+          <span className="next-step-number">05</span>
+          <div>
+            <span className="eyebrow">Run remains future work</span>
+            <h2>No execution has occurred.</h2>
+            <p>
+              This transient Agent Instance is displayed from the current Prepare response. It is
+              not durably persisted or discovered after the Builder session.
+            </p>
+          </div>
+        </div>
+        <button className="button secondary" disabled type="button">
+          <Icon name="lock" size={16} />
+          Run · unavailable
+        </button>
+      </section>
+    </>
+  );
+};
+
 const BuildResultView = ({
   result,
   onEdit,
+  onPrepare,
+  prepareError,
+  prepareResult,
+  preparing,
 }: {
   readonly result: BuildAgentResult;
   readonly onEdit: () => void;
+  readonly onPrepare: () => void;
+  readonly prepareError: UiError | undefined;
+  readonly prepareResult: PrepareAgentResult | undefined;
+  readonly preparing: boolean;
 }): ReactNode => {
   const setupMessage =
     result.readiness.setupRequired === 0
@@ -1106,36 +1399,48 @@ const BuildResultView = ({
           <button className="button secondary" onClick={onEdit} type="button">
             Edit definition
           </button>
-          <button className="button primary" disabled type="button">
-            <Icon name="lock" size={16} />
-            Prepare · coming next
+          <button className="button primary" disabled={preparing} onClick={onPrepare} type="button">
+            {preparing ? <span className="spinner" /> : <Icon name="bolt" size={16} />}
+            {preparing
+              ? 'Preparing…'
+              : prepareResult === undefined
+                ? 'Prepare agent'
+                : 'Prepare again'}
           </button>
         </div>
       </section>
 
-      <section className="truth-banner">
-        <div>
-          <Icon name="layers" size={20} />
+      {prepareResult === undefined ? (
+        <section className="truth-banner">
           <div>
-            <strong>Built, not prepared</strong>
+            <Icon name="layers" size={20} />
+            <div>
+              <strong>{preparing ? 'Preparing this exact Build' : 'Built, not prepared'}</strong>
+              <span>
+                {preparing
+                  ? 'Agent Kit is reconciling conservative environment evidence into an Agent Instance.'
+                  : 'This validated composition describes what the environment must realize. Runtime health has not been evaluated.'}
+              </span>
+            </div>
+          </div>
+          <div className="readiness-totals">
             <span>
-              This validated composition describes what the environment must realize. Runtime health
-              has not been evaluated.
+              <strong>{String(result.readiness.ready)}</strong> ready requirements
+            </span>
+            <span>
+              <strong>{String(result.readiness.setupRequired)}</strong> need setup
+            </span>
+            <span>
+              <strong>{String(result.readiness.configurationRequired)}</strong> need configuration
             </span>
           </div>
-        </div>
-        <div className="readiness-totals">
-          <span>
-            <strong>{String(result.readiness.ready)}</strong> ready requirements
-          </span>
-          <span>
-            <strong>{String(result.readiness.setupRequired)}</strong> need setup
-          </span>
-          <span>
-            <strong>{String(result.readiness.configurationRequired)}</strong> need configuration
-          </span>
-        </div>
-      </section>
+        </section>
+      ) : null}
+
+      {prepareError === undefined ? null : (
+        <ErrorNotice error={prepareError} title="Prepare could not complete" />
+      )}
+      {prepareResult === undefined ? null : <AgentInstanceView result={prepareResult} />}
 
       <section className="result-section capability-results">
         <div className="result-section-heading">
@@ -1156,22 +1461,30 @@ const BuildResultView = ({
       <VsCodeSummary result={result} />
       <ArtifactPreview artifacts={result.artifacts} />
 
-      <section className="next-step">
-        <div>
-          <span className="next-step-number">03</span>
+      {prepareResult === undefined ? (
+        <section className="next-step">
           <div>
-            <span className="eyebrow">Next: Prepare</span>
-            <h2>Realize this build in a specific environment.</h2>
-            <p>
-              Prepare will install or connect bindings, collect environment-owned configuration, and
-              create an Agent Instance. It is intentionally outside this Builder task.
-            </p>
+            <span className="next-step-number">03</span>
+            <div>
+              <span className="eyebrow">Next: Prepare</span>
+              <h2>Realize this build in the local VS Code environment.</h2>
+              <p>
+                Builder will reconstruct and verify this exact Build, then use Agent Kit H7 to
+                create an Agent Instance. Unverified artifacts, connections, configuration, provider
+                prerequisites, and host files remain truthful setup requirements.
+              </p>
+            </div>
           </div>
-        </div>
-        <button className="button secondary" disabled type="button">
-          Prepare integration coming next
-        </button>
-      </section>
+          <button
+            className="button secondary"
+            disabled={preparing}
+            onClick={onPrepare}
+            type="button"
+          >
+            {preparing ? 'Preparing…' : 'Prepare this Build'}
+          </button>
+        </section>
+      ) : null}
     </div>
   );
 };
@@ -1190,6 +1503,10 @@ const BuilderPage = ({
   buildError,
   buildResult,
   onEdit,
+  onPrepare,
+  prepareError,
+  prepareResult,
+  preparing,
 }: {
   readonly catalog: CapabilityCatalogResponse | undefined;
   readonly catalogState: LoadState;
@@ -1204,6 +1521,10 @@ const BuilderPage = ({
   readonly buildError: UiError | undefined;
   readonly buildResult: BuildAgentResult | undefined;
   readonly onEdit: () => void;
+  readonly onPrepare: () => void;
+  readonly prepareError: UiError | undefined;
+  readonly prepareResult: PrepareAgentResult | undefined;
+  readonly preparing: boolean;
 }): ReactNode => (
   <div className="page builder-page">
     <section className="builder-heading">
@@ -1214,7 +1535,11 @@ const BuilderPage = ({
           Define intent and select capabilities. The Platform resolves the infrastructure details.
         </p>
       </div>
-      <Lifecycle built={buildResult !== undefined} />
+      <Lifecycle
+        built={buildResult !== undefined}
+        prepared={prepareResult !== undefined}
+        preparing={preparing}
+      />
     </section>
     {buildResult === undefined ? (
       <div className="authoring-layout">
@@ -1234,7 +1559,14 @@ const BuilderPage = ({
         <DraftOverview catalog={catalog} draft={draft} />
       </div>
     ) : (
-      <BuildResultView onEdit={onEdit} result={buildResult} />
+      <BuildResultView
+        onEdit={onEdit}
+        onPrepare={onPrepare}
+        prepareError={prepareError}
+        prepareResult={prepareResult}
+        preparing={preparing}
+        result={buildResult}
+      />
     )}
   </div>
 );
@@ -1249,7 +1581,12 @@ export const App = (): ReactNode => {
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState<UiError>();
   const [buildResult, setBuildResult] = useState<BuildAgentResult>();
+  const [builtDefinition, setBuiltDefinition] = useState<AgentDefinition>();
+  const [preparing, setPreparing] = useState(false);
+  const [prepareError, setPrepareError] = useState<UiError>();
+  const [prepareResult, setPrepareResult] = useState<PrepareAgentResult>();
   const buildAbort = useRef<AbortController | undefined>(undefined);
+  const prepareAbort = useRef<AbortController | undefined>(undefined);
 
   const loadCatalog = (): void => {
     const controller = new AbortController();
@@ -1285,6 +1622,7 @@ export const App = (): ReactNode => {
   useEffect(
     () => () => {
       buildAbort.current?.abort();
+      prepareAbort.current?.abort();
     },
     [],
   );
@@ -1307,6 +1645,9 @@ export const App = (): ReactNode => {
   const changeDraft = (patch: Partial<AgentDraft>): void => {
     setBuildError(undefined);
     setBuildResult(undefined);
+    setBuiltDefinition(undefined);
+    setPrepareError(undefined);
+    setPrepareResult(undefined);
     setDraft((current) => {
       if (patch.name !== undefined && !idEdited && patch.id === undefined) {
         return { ...current, ...patch, id: deriveAgentId(patch.name) };
@@ -1343,6 +1684,9 @@ export const App = (): ReactNode => {
     setIdEdited(true);
     setBuildError(undefined);
     setBuildResult(undefined);
+    setBuiltDefinition(undefined);
+    setPrepareError(undefined);
+    setPrepareResult(undefined);
     setDraft({
       name: developerOptimizationPreset.name,
       id: developerOptimizationPreset.id,
@@ -1386,12 +1730,16 @@ export const App = (): ReactNode => {
       capabilities: [...selectionPlan.selections],
     };
     buildAbort.current?.abort();
+    prepareAbort.current?.abort();
     const controller = new AbortController();
     buildAbort.current = controller;
     setBuilding(true);
     setBuildError(undefined);
+    setPrepareError(undefined);
+    setPrepareResult(undefined);
     void buildAgent(definition, controller.signal)
       .then((result) => {
+        setBuiltDefinition(definition);
         setBuildResult(result);
       })
       .catch((error: unknown) => {
@@ -1404,6 +1752,39 @@ export const App = (): ReactNode => {
           buildAbort.current = undefined;
         }
       });
+  };
+
+  const prepare = (): void => {
+    if (buildResult === undefined || builtDefinition === undefined) return;
+    prepareAbort.current?.abort();
+    const controller = new AbortController();
+    prepareAbort.current = controller;
+    setPreparing(true);
+    setPrepareError(undefined);
+    setPrepareResult(undefined);
+    void prepareAgent(builtDefinition, buildResult.lockDigest, controller.signal)
+      .then((result) => {
+        setPrepareResult(result);
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setPrepareError(uiError(error, 'The agent preparation failed.'));
+      })
+      .finally(() => {
+        if (prepareAbort.current === controller) {
+          setPreparing(false);
+          prepareAbort.current = undefined;
+        }
+      });
+  };
+
+  const editDefinition = (): void => {
+    prepareAbort.current?.abort();
+    setBuildResult(undefined);
+    setBuiltDefinition(undefined);
+    setPrepareError(undefined);
+    setPrepareResult(undefined);
+    setPreparing(false);
   };
 
   return (
@@ -1426,11 +1807,15 @@ export const App = (): ReactNode => {
           draft={draft}
           onApplyPreset={applyPreset}
           onDraftChange={changeDraft}
-          onEdit={() => setBuildResult(undefined)}
+          onEdit={editDefinition}
+          onPrepare={prepare}
           onProfileChange={changeProfile}
           onSubmit={submit}
           onToggleCapability={toggleCapability}
           policyIssues={selectionPlan.issues}
+          prepareError={prepareError}
+          prepareResult={prepareResult}
+          preparing={preparing}
         />
       )}
     </ProductShell>
