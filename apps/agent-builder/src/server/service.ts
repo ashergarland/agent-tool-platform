@@ -49,6 +49,13 @@ const catalogItem = (
     id: profile.id,
     description: profile.description,
     dimensions: profile.dimensions,
+    bindingModes: [
+      ...new Set(
+        capability.bindings
+          .filter((binding) => binding.profileId === profile.id)
+          .map((binding) => binding.availability),
+      ),
+    ].sort((left, right) => bindingModeOrder[left] - bindingModeOrder[right]),
     setupRequired: profile.prerequisites.setupRequired,
     setupSummary: profile.prerequisites.summary,
     readinessSummary: profile.readiness.summary,
@@ -95,6 +102,7 @@ const capabilityResult = (
     profile: {
       id: capability.profile.id,
       description: capability.profile.description,
+      mutation: capability.profile.dimensions.mutation,
     },
     binding: {
       id: capability.binding.id,
@@ -109,6 +117,9 @@ const capabilityResult = (
     readiness: {
       state: readiness.state,
       requirements: readiness.requirements,
+      setupRequired: capability.profile.prerequisites.setupRequired,
+      setupSummary: capability.profile.prerequisites.summary,
+      summary: capability.profile.readiness.summary,
     },
     configuration: {
       endpointRequired: capability.binding.mode === 'remote',

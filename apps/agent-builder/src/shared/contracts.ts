@@ -12,6 +12,7 @@ export interface CapabilityCatalogProfile {
   readonly id: string;
   readonly description: string;
   readonly dimensions: DeploymentProfileDimensions;
+  readonly bindingModes: readonly BindingMode[];
   readonly setupRequired: boolean;
   readonly setupSummary: string;
   readonly readinessSummary: string;
@@ -56,6 +57,7 @@ export interface BuildCapabilityResult {
   readonly profile: {
     readonly id: string;
     readonly description: string;
+    readonly mutation: DeploymentProfileDimensions['mutation'];
   };
   readonly binding: {
     readonly id: string;
@@ -73,6 +75,9 @@ export interface BuildCapabilityResult {
   readonly readiness: {
     readonly state: ReadinessState;
     readonly requirements: readonly ReadinessRequirement[];
+    readonly setupRequired: boolean;
+    readonly setupSummary: string;
+    readonly summary: string;
   };
   readonly configuration: {
     readonly endpointRequired: boolean;

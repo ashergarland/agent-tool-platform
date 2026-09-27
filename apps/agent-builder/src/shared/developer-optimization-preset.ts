@@ -70,8 +70,8 @@ export const developerOptimizationPreset = {
     { id: 'git-optimizer' },
     { id: 'data-cruncher' },
     { id: 'doc-rag' },
-    { id: 'vision' },
+    { id: 'vision', profile: 'local-package' },
     { id: 'document-optimizer' },
-    { id: 'azure' },
+    { id: 'azure', profile: 'hosted-read-only' },
   ],
 } satisfies AgentDefinition;
