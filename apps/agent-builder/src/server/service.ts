@@ -1,7 +1,19 @@
 import {
+  AgentKitError,
+  READINESS_SCHEMA_VERSION,
   buildVsCodeAgent,
+  createPreparationPlan as createAgentKitPreparationPlan,
+  prepareAgent as prepareAgentWithAgentKit,
   type AgentBuild,
+  type AgentInstanceState,
   type BindingMode,
+  type PreparationAction,
+  type PreparationClock,
+  type PreparationDriver,
+  type PreparationHostIntegrationEvidence,
+  type PreparationPlan,
+  type PreparationResult,
+  type ReadinessSnapshot,
   type VsCodeAdapterOutput,
 } from '@agent-tool-platform/agent-kit';
 import {
@@ -10,23 +22,64 @@ import {
   type CapabilityRegistry,
   type CapabilityRegistryReader,
 } from '@agent-tool-platform/capability-registry';
-import type {
-  BuildAgentResult,
-  BuildCapabilityResult,
-  CapabilityCatalogItem,
-  CapabilityCatalogResponse,
-  GeneratedArtifact,
+import {
+  LOCAL_VSCODE_ENVIRONMENT_ID,
+  type BuildAgentResult,
+  type BuildCapabilityResult,
+  type CapabilityCatalogItem,
+  type CapabilityCatalogResponse,
+  type GeneratedArtifact,
+  type PrepareActionResultPresentation,
+  type PrepareAgentResult,
+  type PreparationActionPresentation,
+  type PreparedInstanceState,
 } from '../shared/contracts.js';
-import { asBuildServiceError, asRegistryServiceError } from './errors.js';
+import {
+  asBuildServiceError,
+  asPreparationServiceError,
+  asRegistryServiceError,
+  BuilderServiceError,
+} from './errors.js';
 
 export interface BuilderService {
-  listCapabilities(): Promise<CapabilityCatalogResponse>;
-  buildAgent(definition: unknown): Promise<BuildAgentResult>;
+  listCapabilities(this: void): Promise<CapabilityCatalogResponse>;
+  buildAgent(this: void, definition: unknown): Promise<BuildAgentResult>;
+  prepareAgent(this: void, request: BuilderPrepareInput): Promise<PrepareAgentResult>;
+}
+
+export interface BuilderPrepareInput {
+  readonly definition: unknown;
+  readonly expectedLockDigest: string;
+  readonly environmentId: string;
+}
+
+export interface BuilderPreparationEnvironment {
+  readonly environmentId: string;
+  readonly readinessSnapshot:
+    | ReadinessSnapshot
+    | ((build: AgentBuild<VsCodeAdapterOutput>) => Promise<ReadinessSnapshot> | ReadinessSnapshot);
+  readonly hostIntegration: PreparationHostIntegrationEvidence;
+  readonly driver?: PreparationDriver;
+  readonly clock?: PreparationClock;
+  readonly existingInstance?: unknown;
+}
+
+export interface BuilderPreparationApi {
+  readonly createPreparationPlan: typeof createAgentKitPreparationPlan;
+  readonly prepareAgent: typeof prepareAgentWithAgentKit;
 }
 
 export interface BuilderServiceOptions {
   readonly loadRegistry?: () => Promise<CapabilityRegistry>;
+  readonly preparationEnvironment?: BuilderPreparationEnvironment;
+  readonly preparationApi?: BuilderPreparationApi;
 }
+
+const localVsCodePreparationEnvironment = (): BuilderPreparationEnvironment => ({
+  environmentId: LOCAL_VSCODE_ENVIRONMENT_ID,
+  readinessSnapshot: { schemaVersion: READINESS_SCHEMA_VERSION },
+  hostIntegration: 'setup-required',
+});
 
 const bindingModeOrder: Readonly<Record<BindingMode, number>> = {
   local: 0,
@@ -209,8 +262,223 @@ const presentBuild = (build: AgentBuild<VsCodeAdapterOutput>): BuildAgentResult 
   };
 };
 
+const preparedInstanceState = (state: AgentInstanceState): PreparedInstanceState => {
+  if (state === 'READY' || state === 'NEEDS_SETUP' || state === 'UNAVAILABLE') return state;
+  throw new AgentKitError(
+    'INVALID_PREPARATION_RESULT',
+    `Prepare returned unsupported runtime state ${state}.`,
+  );
+};
+
+const preparationCapability = (
+  build: AgentBuild<VsCodeAdapterOutput>,
+  action: Exclude<PreparationAction, { readonly kind: 'prepare-host-integration' }>,
+): NonNullable<PreparationActionPresentation['capability']> => {
+  const capability = build.capabilities.find(
+    (candidate) => candidate.binding.key === action.binding.key,
+  );
+  if (capability === undefined) {
+    throw new AgentKitError(
+      'INVALID_PREPARATION_RESULT',
+      'A preparation action has no matching resolved capability.',
+      [`actionId: ${action.actionId}`],
+    );
+  }
+  return {
+    id: action.binding.capabilityId,
+    displayName: capability.capability.displayName,
+    version: action.binding.capabilityVersion,
+    profile: action.binding.profileId,
+    bindingMode: action.binding.mode,
+  };
+};
+
+const presentPreparationAction = (
+  build: AgentBuild<VsCodeAdapterOutput>,
+  action: PreparationAction,
+): PreparationActionPresentation => {
+  if (action.kind === 'prepare-host-integration') {
+    return {
+      actionId: action.actionId,
+      kind: action.kind,
+      concern: 'host-integration',
+      title: 'Prepare generated VS Code host integration',
+      host: {
+        id: action.host.id,
+        adapterSchemaVersion: action.host.adapterSchemaVersion,
+        files: action.files,
+      },
+    };
+  }
+
+  const capability = preparationCapability(build, action);
+  switch (action.kind) {
+    case 'verify-local-artifact':
+      return {
+        actionId: action.actionId,
+        kind: action.kind,
+        concern: 'local-artifact',
+        title: `Verify ${capability.displayName} local artifact`,
+        capability,
+        artifact: {
+          id: action.artifact.id,
+          identifier: action.artifact.identifier,
+          kind: action.artifact.kind,
+          version: action.artifact.version,
+          availability: action.artifact.availability,
+        },
+      };
+    case 'make-local-artifact-available':
+      return {
+        actionId: action.actionId,
+        kind: action.kind,
+        concern: 'local-artifact',
+        title: `Make ${capability.displayName} local artifact available`,
+        capability,
+        artifact: {
+          id: action.artifact.id,
+          identifier: action.artifact.identifier,
+          kind: action.artifact.kind,
+          version: action.artifact.version,
+          availability: action.artifact.availability,
+        },
+      };
+    case 'verify-configuration':
+      return {
+        actionId: action.actionId,
+        kind: action.kind,
+        concern: 'configuration',
+        title: `Verify ${capability.displayName} configuration`,
+        capability,
+        configurationName: action.configurationName,
+      };
+    case 'verify-remote-connection':
+      return {
+        actionId: action.actionId,
+        kind: action.kind,
+        concern: 'remote-connection',
+        title: `Verify ${capability.displayName} remote connection`,
+        capability,
+      };
+    case 'verify-provider-prerequisite':
+      return {
+        actionId: action.actionId,
+        kind: action.kind,
+        concern: 'provider-prerequisite',
+        title: `Verify ${capability.displayName} provider prerequisite`,
+        capability,
+        prerequisiteId: action.prerequisiteId,
+      };
+  }
+  throw new AgentKitError(
+    'INVALID_PREPARATION_RESULT',
+    'Prepare returned an unsupported preparation action.',
+  );
+};
+
+const presentPreparation = (
+  build: AgentBuild<VsCodeAdapterOutput>,
+  plan: PreparationPlan,
+  result: PreparationResult,
+): PrepareAgentResult => {
+  const presentedActions = plan.actions.map((action) => presentPreparationAction(build, action));
+  const actionsById = new Map(presentedActions.map((action) => [action.actionId, action]));
+  const actionResults = result.actionResults.map(
+    (actionResult): PrepareActionResultPresentation => {
+      const action = actionsById.get(actionResult.actionId);
+      if (action === undefined) {
+        throw new AgentKitError(
+          'INVALID_PREPARATION_RESULT',
+          'A preparation result has no matching planned action.',
+          [`actionId: ${actionResult.actionId}`],
+        );
+      }
+      return { action, status: actionResult.status };
+    },
+  );
+  const summary = {
+    ready: actionResults.filter(({ status }) => status === 'success' || status === 'already-ready')
+      .length,
+    setupRequired: actionResults.filter(({ status }) => status === 'setup-required').length,
+    unavailable: actionResults.filter(({ status }) => status === 'unavailable').length,
+  };
+  const capabilities = result.readiness.capabilities.map((readiness) => {
+    const capability = build.capabilities.find(
+      (candidate) =>
+        candidate.capability.id === readiness.id &&
+        candidate.capability.version.value === readiness.version &&
+        candidate.profile.id === readiness.profileId,
+    );
+    const binding = result.instance.bindings.find(
+      (candidate) =>
+        candidate.capabilityId === readiness.id &&
+        candidate.capabilityVersion === readiness.version &&
+        candidate.profileId === readiness.profileId,
+    );
+    if (capability === undefined || binding === undefined) {
+      throw new AgentKitError(
+        'INVALID_PREPARATION_RESULT',
+        'Prepared readiness has no matching Build capability or instance binding.',
+        [`capability: ${readiness.id}`],
+      );
+    }
+    return {
+      id: readiness.id,
+      displayName: capability.capability.displayName,
+      version: readiness.version,
+      profile: readiness.profileId,
+      bindingMode: readiness.bindingMode,
+      state: readiness.state,
+      instanceState: preparedInstanceState(binding.state),
+      requirements: readiness.requirements,
+    };
+  });
+  const setupRequirements = result.setupRequirements.map((requirement) => ({
+    action: presentPreparationAction(build, requirement.action),
+    status: requirement.status,
+  }));
+
+  return {
+    agent: {
+      id: result.instance.agentDefinition.id,
+      version: result.instance.agentDefinition.version,
+    },
+    build: { lockDigest: result.instance.build.lockDigest },
+    instance: {
+      instanceId: result.instance.instanceId,
+      environmentId: result.instance.environmentId,
+      preparedAt: result.instance.preparedAt,
+      state: preparedInstanceState(result.instance.state),
+    },
+    environment: {
+      id: result.instance.environmentId,
+      label: 'Local · VS Code',
+    },
+    plan: {
+      instanceId: plan.instance.instanceId,
+      environmentId: plan.instance.environmentId,
+      actions: presentedActions,
+    },
+    preparation: {
+      runnable: result.runnable,
+      disposition: result.disposition,
+      hostIntegration: result.hostIntegration,
+      summary,
+      actionResults,
+    },
+    readiness: { capabilities },
+    setupRequirements,
+  };
+};
+
 export const createBuilderService = (options: BuilderServiceOptions = {}): BuilderService => {
   const loadRegistry = options.loadRegistry ?? loadFirstPartyCapabilityRegistry;
+  const preparationEnvironment =
+    options.preparationEnvironment ?? localVsCodePreparationEnvironment();
+  const preparationApi = options.preparationApi ?? {
+    createPreparationPlan: createAgentKitPreparationPlan,
+    prepareAgent: prepareAgentWithAgentKit,
+  };
   let readerPromise:
     | Promise<{
         readonly document: CapabilityRegistry;
@@ -254,6 +522,54 @@ export const createBuilderService = (options: BuilderServiceOptions = {}): Build
         return presentBuild(await buildVsCodeAgent(definition, { registry: reader }));
       } catch (error) {
         throw asBuildServiceError(error);
+      }
+    },
+
+    async prepareAgent(request) {
+      try {
+        if (request.environmentId !== preparationEnvironment.environmentId) {
+          throw new BuilderServiceError(
+            'INVALID_PREPARATION_INPUT',
+            'The requested preparation environment is not available.',
+            [],
+            400,
+          );
+        }
+        const { reader } = await registry();
+        const build = await buildVsCodeAgent(request.definition, { registry: reader });
+        if (build.lockDigest !== request.expectedLockDigest) {
+          throw new BuilderServiceError(
+            'BUILD_LOCK_MISMATCH',
+            'The displayed Build no longer matches the canonical definition. Build the agent again before preparing.',
+            [],
+            409,
+          );
+        }
+        const readinessSnapshot =
+          typeof preparationEnvironment.readinessSnapshot === 'function'
+            ? await preparationEnvironment.readinessSnapshot(build)
+            : preparationEnvironment.readinessSnapshot;
+        const preparationOptions = {
+          environmentId: preparationEnvironment.environmentId,
+          readinessSnapshot,
+          hostIntegration: preparationEnvironment.hostIntegration,
+        };
+        const plan = preparationApi.createPreparationPlan(build, preparationOptions);
+        const result = await preparationApi.prepareAgent(build, {
+          ...preparationOptions,
+          ...(preparationEnvironment.driver === undefined
+            ? {}
+            : { driver: preparationEnvironment.driver }),
+          ...(preparationEnvironment.clock === undefined
+            ? {}
+            : { clock: preparationEnvironment.clock }),
+          ...(preparationEnvironment.existingInstance === undefined
+            ? {}
+            : { existingInstance: preparationEnvironment.existingInstance }),
+        });
+        return presentPreparation(build, plan, result);
+      } catch (error) {
+        throw asPreparationServiceError(error);
       }
     },
   };

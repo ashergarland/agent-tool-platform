@@ -7,7 +7,8 @@ import {
 } from '../src/server/application.js';
 import { BuilderServiceError } from '../src/server/errors.js';
 import type { BuilderService } from '../src/server/service.js';
-import { buildResultFixture, catalogFixture } from './fixtures.js';
+import { LOCAL_VSCODE_ENVIRONMENT_ID } from '../src/shared/contracts.js';
+import { buildResultFixture, catalogFixture, prepareResultFixture } from './fixtures.js';
 
 const applications: BuilderApplication[] = [];
 
@@ -33,27 +34,36 @@ const start = async (service?: BuilderService) => {
 const serviceFixture = (): BuilderService => ({
   listCapabilities: vi.fn(async () => catalogFixture),
   buildAgent: vi.fn(async () => buildResultFixture),
+  prepareAgent: vi.fn(async () => prepareResultFixture()),
 });
 
 describe('Agent Builder loopback API', () => {
-  it('exposes only bounded health, catalog, and build operations', async () => {
+  it('exposes only bounded health, catalog, build, and prepare operations', async () => {
     const service = serviceFixture();
     const { origin } = await start(service);
+    const definition = {
+      schemaVersion: 1 as const,
+      id: 'test-agent',
+      name: 'Test Agent',
+      version: '1.0.0',
+      instructions: 'Test instructions.',
+      capabilities: [{ id: 'ast-summarizer' }],
+    };
 
     const health = await fetch(`${origin}/api/health`);
     const catalog = await fetch(`${origin}/api/capabilities`);
     const build = await fetch(`${origin}/api/build`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ definition }),
+    });
+    const prepare = await fetch(`${origin}/api/prepare`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        definition: {
-          schemaVersion: 1,
-          id: 'test-agent',
-          name: 'Test Agent',
-          version: '1.0.0',
-          instructions: 'Test instructions.',
-          capabilities: [{ id: 'ast-summarizer' }],
-        },
+        definition,
+        expectedLockDigest: buildResultFixture.lockDigest,
+        environmentId: LOCAL_VSCODE_ENVIRONMENT_ID,
       }),
     });
 
@@ -63,11 +73,83 @@ describe('Agent Builder loopback API', () => {
     await expect(catalog.json()).resolves.toEqual(catalogFixture);
     expect(build.status).toBe(200);
     await expect(build.json()).resolves.toEqual(buildResultFixture);
+    expect(prepare.status).toBe(200);
+    await expect(prepare.json()).resolves.toEqual(prepareResultFixture());
+    expect(service.prepareAgent).toHaveBeenCalledWith({
+      definition,
+      expectedLockDigest: buildResultFixture.lockDigest,
+      environmentId: LOCAL_VSCODE_ENVIRONMENT_ID,
+    });
 
     for (const path of ['/api/files', '/api/command', '/api/proxy', '/api/packages']) {
       const response = await fetch(`${origin}${path}`, { method: 'POST' });
       expect(response.status, path).toBe(404);
     }
+  });
+
+  it('validates the exact bounded Prepare request without accepting paths or commands', async () => {
+    const service = serviceFixture();
+    const { origin } = await start(service);
+    const valid = {
+      definition: {
+        schemaVersion: 1,
+        id: 'test-agent',
+        name: 'Test Agent',
+        version: '1.0.0',
+        instructions: 'Test instructions.',
+        capabilities: [{ id: 'ast-summarizer' }],
+      },
+      expectedLockDigest: buildResultFixture.lockDigest,
+      environmentId: LOCAL_VSCODE_ENVIRONMENT_ID,
+    };
+
+    const mediaType = await fetch(`${origin}/api/prepare`, {
+      method: 'POST',
+      body: JSON.stringify(valid),
+    });
+    expect(mediaType.status).toBe(415);
+
+    const extraProperty = await fetch(`${origin}/api/prepare`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...valid, command: 'npm install' }),
+    });
+    expect(extraProperty.status).toBe(400);
+
+    const invalidDigest = await fetch(`${origin}/api/prepare`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...valid, expectedLockDigest: 'latest' }),
+    });
+    expect(invalidDigest.status).toBe(400);
+
+    const arbitraryEnvironment = await fetch(`${origin}/api/prepare`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...valid, environmentId: 'C:\\Users\\someone' }),
+    });
+    expect(arbitraryEnvironment.status).toBe(400);
+
+    const oversized = await fetch(`${origin}/api/prepare`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...valid,
+        definition: { ...valid.definition, instructions: 'x'.repeat(33_000) },
+      }),
+    });
+    expect(oversized.status).toBe(413);
+
+    const originRejected = await fetch(`${origin}/api/prepare`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: 'https://example.com',
+      },
+      body: JSON.stringify(valid),
+    });
+    expect(originRejected.status).toBe(403);
+    expect(service.prepareAgent).not.toHaveBeenCalled();
   });
 
   it('validates media type, exact request shape, body bounds, origin, and host', async () => {
@@ -138,6 +220,7 @@ describe('Agent Builder loopback API', () => {
         );
       }),
       buildAgent: vi.fn(async () => buildResultFixture),
+      prepareAgent: vi.fn(async () => prepareResultFixture()),
     };
     const { logger, origin } = await start(service);
 
@@ -153,5 +236,43 @@ describe('Agent Builder loopback API', () => {
     });
     expect(JSON.stringify(body)).not.toContain('stack');
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('REGISTRY_UNAVAILABLE'));
+  });
+
+  it('preserves bounded preparation error codes without exposing local diagnostics', async () => {
+    const privateDetail = 'C:\\Users\\private\\token.txt';
+    const service = serviceFixture();
+    vi.mocked(service.prepareAgent).mockRejectedValueOnce(
+      new BuilderServiceError(
+        'INVALID_PREPARATION_INPUT',
+        'The preparation input is inconsistent.',
+        ['Build again before preparing.'],
+        400,
+        { cause: new Error(privateDetail) },
+      ),
+    );
+    const { logger, origin } = await start(service);
+
+    const response = await fetch(`${origin}/api/prepare`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        definition: {},
+        expectedLockDigest: buildResultFixture.lockDigest,
+        environmentId: LOCAL_VSCODE_ENVIRONMENT_ID,
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body).toEqual({
+      error: {
+        code: 'INVALID_PREPARATION_INPUT',
+        summary: 'The preparation input is inconsistent.',
+        issues: ['Build again before preparing.'],
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain(privateDetail);
+    expect(logger.error).not.toHaveBeenCalledWith(expect.stringContaining(privateDetail));
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('INVALID_PREPARATION_INPUT'));
   });
 });

@@ -1,7 +1,11 @@
 import type {
   AgentDefinition,
   AgentInstanceSeam,
+  AgentInstanceState,
   BindingMode,
+  PreparationAction,
+  PreparationActionResult,
+  ReadinessCapabilityState,
   ReadinessRequirement,
 } from '@agent-tool-platform/agent-kit';
 import type { DeploymentProfileDimensions } from '@agent-tool-platform/capability-registry';
@@ -41,13 +45,15 @@ export interface BuildAgentRequest {
   readonly definition: AgentDefinition;
 }
 
-export type ReadinessState =
-  | 'available-local'
-  | 'ready'
-  | 'local-setup-required'
-  | 'remote-provider-setup-required'
-  | 'missing-configuration'
-  | 'incompatible-binding';
+export const LOCAL_VSCODE_ENVIRONMENT_ID = 'local-vscode-builder';
+
+export interface PrepareAgentRequest {
+  readonly definition: AgentDefinition;
+  readonly expectedLockDigest: string;
+  readonly environmentId: typeof LOCAL_VSCODE_ENVIRONMENT_ID;
+}
+
+export type ReadinessState = ReadinessCapabilityState;
 
 export interface BuildCapabilityResult {
   readonly id: string;
@@ -124,8 +130,111 @@ export interface BuildAgentResult {
   readonly instanceIdentity: AgentInstanceSeam;
 }
 
+export type PreparedInstanceState = Extract<
+  AgentInstanceState,
+  'NEEDS_SETUP' | 'READY' | 'UNAVAILABLE'
+>;
+export type PreparationActionStatus = PreparationActionResult['status'];
+
+export interface PreparationActionPresentation {
+  readonly actionId: string;
+  readonly kind: PreparationAction['kind'];
+  readonly concern:
+    | 'configuration'
+    | 'host-integration'
+    | 'local-artifact'
+    | 'provider-prerequisite'
+    | 'remote-connection';
+  readonly title: string;
+  readonly capability?: {
+    readonly id: string;
+    readonly displayName: string;
+    readonly version: string;
+    readonly profile: string;
+    readonly bindingMode: BindingMode;
+  };
+  readonly artifact?: {
+    readonly id: string;
+    readonly identifier: string;
+    readonly kind: 'npm' | 'oci' | 'source';
+    readonly version: string;
+    readonly availability: 'published' | 'declared' | 'source-only';
+  };
+  readonly configurationName?: string;
+  readonly prerequisiteId?: string;
+  readonly host?: {
+    readonly id: string;
+    readonly adapterSchemaVersion: number;
+    readonly files: readonly {
+      readonly path: string;
+      readonly mediaType: 'application/json' | 'text/markdown';
+      readonly contentDigest: string;
+    }[];
+  };
+}
+
+export interface PrepareActionResultPresentation {
+  readonly action: PreparationActionPresentation;
+  readonly status: PreparationActionStatus;
+}
+
+export interface PrepareAgentResult {
+  readonly agent: {
+    readonly id: string;
+    readonly version: string;
+  };
+  readonly build: {
+    readonly lockDigest: string;
+  };
+  readonly instance: {
+    readonly instanceId: string;
+    readonly environmentId: string;
+    readonly preparedAt: string;
+    readonly state: PreparedInstanceState;
+  };
+  readonly environment: {
+    readonly id: string;
+    readonly label: 'Local · VS Code';
+  };
+  readonly plan: {
+    readonly instanceId: string;
+    readonly environmentId: string;
+    readonly actions: readonly PreparationActionPresentation[];
+  };
+  readonly preparation: {
+    readonly runnable: boolean;
+    readonly disposition: 'created' | 'updated';
+    readonly hostIntegration: {
+      readonly actionId: string;
+      readonly status: PreparationActionStatus;
+    };
+    readonly summary: {
+      readonly ready: number;
+      readonly setupRequired: number;
+      readonly unavailable: number;
+    };
+    readonly actionResults: readonly PrepareActionResultPresentation[];
+  };
+  readonly readiness: {
+    readonly capabilities: readonly {
+      readonly id: string;
+      readonly displayName: string;
+      readonly version: string;
+      readonly profile: string;
+      readonly bindingMode: BindingMode;
+      readonly state: ReadinessState;
+      readonly instanceState: PreparedInstanceState;
+      readonly requirements: readonly ReadinessRequirement[];
+    }[];
+  };
+  readonly setupRequirements: readonly (PrepareActionResultPresentation & {
+    readonly status: 'setup-required' | 'unavailable';
+  })[];
+}
+
 export type BuilderErrorCode =
   | 'BUILD_FAILED'
+  | 'BUILD_LOCK_MISMATCH'
   | 'INVALID_REQUEST'
   | 'PAYLOAD_TOO_LARGE'
   | 'REGISTRY_UNAVAILABLE'
@@ -140,7 +249,11 @@ export type BuilderErrorCode =
   | 'INVALID_LOCK'
   | 'INVALID_ADAPTER_OUTPUT'
   | 'INVALID_READINESS_INPUT'
-  | 'INVALID_INSTANCE_IDENTITY';
+  | 'INVALID_INSTANCE_IDENTITY'
+  | 'INVALID_AGENT_INSTANCE'
+  | 'INVALID_PREPARATION_INPUT'
+  | 'INVALID_PREPARATION_RESULT'
+  | 'PREPARATION_FAILED';
 
 export interface BuilderErrorResponse {
   readonly error: {

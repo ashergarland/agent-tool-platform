@@ -4,9 +4,10 @@ Agent Builder is the private, local product UI for Agent Tool Platform. It lets 
 first-party capabilities, author a host-neutral agent, and run the real Agent Kit build pipeline
 without learning Registry schemas, package identities, MCP transports, or binding keys.
 
-Builder implements **Define** and **Build**, including capability execution/profile policy. It does
-not implement **Prepare**, run an agent, install capabilities, deploy providers, or manage Agent
-Instances.
+Builder implements **Define**, **Build**, and **Prepare**, including capability execution/profile
+policy and the transient presentation of the resulting Agent Instance. It does not run an agent,
+generically install capabilities, deploy providers, durably persist or discover Agent Instances, or
+provide Agent management.
 
 ## Architecture
 
@@ -21,7 +22,7 @@ Agent Builder local Node application (127.0.0.1 only)
    +-- Agent Kit public package API
    |
    v
-AgentDefinition / agent.lock / readiness / VS Code outputs
+AgentDefinition / agent.lock / readiness / VS Code outputs / Prepared Agent Instance
 ```
 
 The Registry loader and Agent Kit use Node APIs, so they remain behind a small same-origin HTTP
@@ -36,11 +37,14 @@ The API exposes only:
 
 - `GET /api/health`;
 - `GET /api/capabilities`; and
-- `POST /api/build`.
+- `POST /api/build`; and
+- `POST /api/prepare`.
 
 It has no arbitrary filesystem read/write, shell, package installation, command execution, or HTTP
-proxy operation. Requests are size-bounded, Build accepts one exact `definition` property, and the
-listener binds to `127.0.0.1`. Secret and endpoint values are neither requested nor persisted.
+proxy operation. Requests are size-bounded, Build accepts one exact `definition` property, and
+Prepare accepts only the canonical definition, expected lock digest, and fixed local VS Code
+environment identifier. The listener binds to `127.0.0.1`. Secret and endpoint values are neither
+requested, returned, logged, nor persisted.
 
 ## Start
 
@@ -162,9 +166,58 @@ Build creates a deterministic, validated composition and reports what an environ
 It does not install an artifact, establish a provider connection, collect a credential, or prove
 runtime health.
 
-Prepare can later realize the build in a chosen environment and create an Agent Instance. Builder
-deliberately renders Prepare as disabled/coming next and invokes no Prepare API. This implementation
-defines no replacement Prepare or Agent Instance contract.
+Prepare realizes that exact Build for one bounded environment and returns an H7 Prepared Agent
+Instance. The browser sends the canonical `AgentDefinition` used for Build, the displayed lock
+digest, and the fixed `local-vscode-builder` environment id. The stateless server reloads the same
+first-party Registry, reruns `buildVsCodeAgent()`, and rejects the request if the rebuilt lock digest
+does not exactly match. It never accepts a browser-reconstructed `AgentBuild` and keeps no Build
+cache.
+
+After lock verification, Builder calls the public Agent Kit `createPreparationPlan()` and
+`prepareAgent()` APIs. Agent Kit remains authoritative for Build consistency, plan and action
+identity, readiness reconciliation, instance identity and state, runnable state, setup requirements,
+action results, and created/updated disposition. Builder only projects those contracts into a
+presentation-safe response.
+
+### Truthful readiness evidence
+
+The production local VS Code preparation environment starts with an empty `ReadinessSnapshot`.
+Builder does not infer local availability from a published package, remote availability from an
+endpoint reference, provider readiness from Registry metadata, or configuration availability from a
+required name. Generated VS Code files are previewed but not written, so host integration also starts
+as `setup-required`.
+
+Consequently, the current Developer Optimization Agent normally prepares to `NEEDS_SETUP` and is not
+runnable. That is a successful Prepare result: the canonical agent has been realized as an Agent
+Instance contract while its environment requirements remain unresolved. `UNAVAILABLE` is reserved
+for concrete unavailable evidence, and `READY` requires every capability binding plus host
+integration to be satisfied. Prepare does not manufacture the later runtime/telemetry states
+`ACTIVE` or `DEGRADED`.
+
+### Preparation driver boundary
+
+Builder exposes a server-side preparation-environment seam for a `ReadinessSnapshot`,
+`PreparationDriver`, host-integration evidence, clock, and optional existing instance. Production
+injects no driver because it cannot currently satisfy unresolved actions safely. Agent Kit therefore
+returns `setup-required` for local artifact availability, named configuration, remote connection,
+provider prerequisites, and generated host integration that lack evidence.
+
+Tests inject controlled evidence and a narrow driver to prove the same integration can produce a
+runnable `READY` instance and can reconcile an existing instance with deterministic identity. That
+synthetic evidence is test-only. Builder does not run npm installation, package lifecycle scripts,
+OCI workloads, shell commands, provider provisioning, Azure calls, or arbitrary filesystem writes.
+
+### Agent Instance boundary
+
+The Prepare response displays the deterministic instance id, environment id, `READY`,
+`NEEDS_SETUP`, or `UNAVAILABLE` state, runnable flag, disposition, action results, capability
+readiness, host-integration result, and unresolved setup requirements. It keeps Build-selected local,
+remote, and hybrid bindings unchanged and never writes environment state into `AgentDefinition` or
+`agent.yaml`.
+
+The displayed instance is transient. There is no instance database, JSON state directory, workspace
+scan, startup discovery, instance list, or history. Durable Local Agent Instance
+persistence/discovery is the next milestone. Run remains disabled and no execution is implied.
 
 ## Validation
 
@@ -176,17 +229,20 @@ npm run build
 npm run builder:smoke
 ```
 
-The tests send Automatic, Local only, Custom, and the real Developer Optimization preset through
-the Builder service/API boundary, real Capability Registry, and `buildVsCodeAgent()`. They check
-Registry-derived profile choices, mutation posture, local-only incompatibility, mixed execution,
-deterministic outputs, binding/readiness presentation, generated files, and Azure configuration
-references without supplying a secret.
+The tests send Automatic, Local only, Custom, and the real Developer Optimization preset through the
+Builder service/API boundary, real Capability Registry, `buildVsCodeAgent()`,
+`createPreparationPlan()`, and `prepareAgent()`. They check Registry-derived profile choices,
+mutation posture, local-only incompatibility, mixed execution, deterministic outputs, lock mismatch
+rejection, conservative production readiness, synthetic `READY`, reconciliation, bounded HTTP
+handling, all three preparation states, generated files, and Azure configuration references without
+supplying a secret.
 
 ## Current limitations
 
-- Prepare and Run are not implemented.
+- Run is not implemented.
 - No files are exported or written.
 - No capability or provider is installed/deployed.
 - No endpoints or secret values are collected.
+- Prepared Agent Instances are not durably persisted or discovered.
 - No Agent Instance inventory, telemetry, or management view exists.
 - VS Code is the only polished Builder adapter result.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createBuilderService } from '../src/server/service.js';
+import { LOCAL_VSCODE_ENVIRONMENT_ID } from '../src/shared/contracts.js';
 import { developerOptimizationPreset } from '../src/shared/developer-optimization-preset.js';
 
 describe('Developer Optimization Agent Builder acceptance', () => {
@@ -102,5 +103,50 @@ describe('Developer Optimization Agent Builder acceptance', () => {
     expect(first.readiness.setupRequired).toBe(7);
     expect(first.readiness.configurationRequired).toBe(1);
     expect(first.lockDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+
+    const prepared = await service.prepareAgent({
+      definition: developerOptimizationPreset,
+      expectedLockDigest: first.lockDigest,
+      environmentId: LOCAL_VSCODE_ENVIRONMENT_ID,
+    });
+    expect(prepared.agent).toEqual({
+      id: 'developer-optimization',
+      version: '1.0.0',
+    });
+    expect(prepared.build.lockDigest).toBe(first.lockDigest);
+    expect(prepared.instance).toMatchObject({
+      environmentId: LOCAL_VSCODE_ENVIRONMENT_ID,
+      state: 'NEEDS_SETUP',
+    });
+    expect(prepared.instance.instanceId).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(prepared.preparation.runnable).toBe(false);
+    expect(prepared.preparation.hostIntegration.status).toBe('setup-required');
+    expect(prepared.setupRequirements.length).toBe(prepared.plan.actions.length);
+    expect(prepared.plan.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'make-local-artifact-available',
+          capability: expect.objectContaining({ id: 'vision', profile: 'local-package' }),
+        }),
+        expect.objectContaining({
+          kind: 'verify-configuration',
+          capability: expect.objectContaining({ id: 'azure', profile: 'hosted-read-only' }),
+          configurationName: 'connector-api-key',
+        }),
+        expect.objectContaining({ kind: 'verify-remote-connection' }),
+        expect.objectContaining({ kind: 'verify-provider-prerequisite' }),
+        expect.objectContaining({ kind: 'prepare-host-integration' }),
+      ]),
+    );
+    expect(prepared.readiness.capabilities.find(({ id }) => id === 'vision')).toMatchObject({
+      profile: 'local-package',
+      state: 'local-setup-required',
+    });
+    expect(prepared.readiness.capabilities.find(({ id }) => id === 'azure')).toMatchObject({
+      profile: 'hosted-read-only',
+      state: 'missing-configuration',
+    });
+    expect(JSON.stringify(prepared)).not.toContain('actual-secret');
+    expect(JSON.stringify(prepared)).not.toMatch(/[A-Za-z]:\\/u);
   });
 });
