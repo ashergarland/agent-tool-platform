@@ -13,6 +13,7 @@ export * from './errors.js';
 export * from './cancellation.js';
 
 export * from './auth/index.js';
+export * from './artifacts/index.js';
 export * from './capability/index.js';
 export * from './concurrency/index.js';
 export * from './config/index.js';

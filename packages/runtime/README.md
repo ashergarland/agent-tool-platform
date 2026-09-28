@@ -71,6 +71,7 @@ Deliberate subpath exports exist for narrower imports:
 | `/errors`       | `AppError`, the twelve error codes, constructors, `toAppError`, status and retryability mapping.                                         |
 | `/cancellation` | `Deadline`, `linkSignals`, `whenAborted`, `neverCancelled`.                                                                              |
 | `/auth`         | `Principal`, `Authenticator`, API-key and Entra JWT authenticators, credential strength and fingerprinting.                              |
+| `/artifacts`    | Bounded npm local-artifact materialization, repeat verification, layout identity, and typed failures.                                    |
 | `/capability`   | `defineAgentToolCapability`, `createAgentToolApplication`, `startAgentToolApplication`, `startStdioAgentToolApplication`, `ToolInvoker`. |
 | `/concurrency`  | `BoundedSemaphore`, `BoundedQueue`.                                                                                                      |
 | `/config`       | `PlatformConfig`, `defineCapabilityConfig`, `loadCapabilityConfig`, env parsing helpers.                                                 |
@@ -88,6 +89,72 @@ Deliberate subpath exports exist for narrower imports:
 | `/process`      | `buildChildEnvironment`, `resolveExecutable`, `runBoundedProcess`.                                                                       |
 | `/telemetry`    | The telemetry contract, sinks, and measurement sanitization.                                                                             |
 | `/tools`        | `ToolDefinition`, `ToolRegistry`, routing grammar and rendering.                                                                         |
+
+## Local artifact materialization
+
+The `/artifacts` surface is the bounded v1 reference implementation behind Agent Kit's prepared
+local-artifact evidence. It intentionally supports one proof: an exact published npm package with
+one selected Node-package bin, canonical SHA-512 npm integrity, and
+`lifecycleScripts: "forbidden"`.
+
+```ts
+import {
+  materializeNpmLocalArtifact,
+  verifyNpmLocalArtifact,
+} from '@agent-tool-platform/runtime/artifacts';
+
+const options = {
+  root: consumerOwnedAbsoluteRoot,
+  npmCliPath: trustedNpmCliModulePath,
+};
+const spec = {
+  packageName: '@example/capability',
+  version: '1.2.3',
+  binName: 'example-capability',
+  integrity: 'sha512-...',
+  lifecycleScripts: 'forbidden' as const,
+};
+
+const first = await materializeNpmLocalArtifact(spec, options);
+const repeated = await verifyNpmLocalArtifact(spec, options);
+```
+
+The consumer owns and supplies the root. Runtime rejects a relative path, UNC path, symlink root,
+or filesystem root and creates one deterministic
+`artifacts/npm/sha256-<immutable-identity>` layout beneath it. It never selects a home-directory
+default, performs a global install, changes an unrelated project manifest, uses `npm link`, searches
+sibling checkouts, or adds the result to `PATH`.
+
+The registry source path retrieves exact-version metadata and the selected tarball through public
+HTTPS with manual bounded redirects, bounded response bytes, cancellation, and bounded request
+duration. Metadata preflights installed bytes and file count, and Runtime verifies the streamed
+top-level archive against the locked SHA-512 SRI before installation. Tests may inject the fetch
+boundary, and offline consumers can instead supply a specific archive path; the same size and SRI
+verification applies. Normal conformance tests use that network-free path. Retrieval is separate
+from Registry loading; Registry remains metadata and discovery.
+
+Installation happens in a private staging project with `--ignore-scripts`, `--no-save`, and no
+package lock mutation outside that staging area. Runtime invokes npm as a bounded Node subprocess
+with no shell, a scratch-only home, cache, and config, bounded process time and output, and
+lifecycle scripts disabled. Runtime does not expose npm arguments or an arbitrary command surface.
+npm owns archive extraction and its traversal protections; Runtime does not implement a second tar
+extractor. After installation, Runtime validates package name, exact version, and the selected bin
+target, rejects escaping or symlink entrypoints, bounds every path, file count, metadata record,
+and installed byte, and hashes the complete installed tree.
+
+The portable lock identity covers the exact selected top-level npm tarball, not a portable npm
+dependency lock graph. npm may resolve that tarball's declared dependencies inside staging. The
+archive byte limit is enforced while reading the selected tarball; dependency installation is
+confined by the staging root and subprocess bounds, and the full resulting tree must satisfy byte,
+file-count, and path limits before it can be committed. The complete tree digest belongs to the
+environment-specific prepared realization, so v1 guarantees repeat verification in that
+environment rather than claiming byte-identical dependency trees across independent environments.
+
+The committed environment manifest contains relative paths and verification digests only. Repeat
+verification revalidates package/bin identity and the full tree without reinstalling; missing
+state is distinct from corruption. The returned launch uses the current absolute Node executable
+and exact installed entrypoint, so Windows and Linux consumers invoke one argv representation
+without guessing `.cmd` versus POSIX shims and without a shell.
 
 ## Lifecycle-owned scratch workspaces
 

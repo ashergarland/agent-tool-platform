@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
-  "schemaVersion": "1.1.0",
+  "schemaVersion": "1.2.0",
   "kind": "capability",
   "id": "ast-summarizer",
   "displayName": "AST Summarizer",
@@ -21,7 +21,14 @@
       "identifier": "@agent-tool-platform/ast-summarizer",
       "version": "0.1.1",
       "availability": "published",
-      "reference": "v0.1.1"
+      "reference": "v0.1.1",
+      "localExecution": {
+        "schemaVersion": 1,
+        "kind": "node-package-bin",
+        "bin": "agent-tool-ast-summarizer",
+        "integrity": "sha512-KLP86c/Ylp+oqCTVHuZdHwql2GX4Xfai59UEXUjWrFpzq/l1vMlMPWz44jFgXNaavAmiVl07y73oplVwnKXRxw==",
+        "lifecycleScripts": "forbidden"
+      }
     }
   ],
   "links": {

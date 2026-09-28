@@ -137,7 +137,13 @@ const resolveArtifact = (
   };
   switch (artifact.kind) {
     case 'npm':
-      return { ...common, kind: 'npm' };
+      return {
+        ...common,
+        kind: 'npm',
+        ...(artifact.localExecution === undefined
+          ? {}
+          : { localExecution: artifact.localExecution }),
+      };
     case 'oci':
       return { ...common, kind: 'oci' };
     case 'source':

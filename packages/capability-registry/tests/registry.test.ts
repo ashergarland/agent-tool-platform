@@ -23,6 +23,7 @@ import {
   deliveryDimensions,
   executionDimensions,
   generateFirstPartyRegistry,
+  isMaterializableNpmArtifact,
   loadFirstPartyCapabilityRegistry,
   mutationDimensions,
   normalizeCapabilityEntry,
@@ -95,7 +96,7 @@ describe('capability registry JSON Schemas', () => {
 
     expect(entrySchema.safeParse(registry.capabilities[0]).success).toBe(true);
     expect(registrySchema.safeParse(registry).success).toBe(true);
-    expect(capabilityRegistrySchemaVersion).toBe('1.1.0');
+    expect(capabilityRegistrySchemaVersion).toBe('1.2.0');
 
     const entry = clone(registry.capabilities[0]!);
     const priorEntry = { ...entry, schemaVersion: '1.0.0' };
@@ -128,6 +129,44 @@ describe('first-party registry', () => {
       'git-optimizer': 1,
       vision: 4,
     });
+  });
+
+  it('keeps legacy artifact entries valid while exposing one truthful materializable npm release', async () => {
+    const registry = await loadFirstPartyCapabilityRegistry();
+    const declared = clone(registry.capabilities.find((entry) => entry.id === 'doc-rag')!);
+    expect(validateCapabilityEntryDocument(declared)).toEqual({ valid: true, errors: [] });
+    expect(isMaterializableNpmArtifact(declared.artifacts[0]!)).toBe(false);
+
+    const ast = registry.capabilities.find((entry) => entry.id === 'ast-summarizer')!;
+    const artifact = ast.artifacts[0]!;
+    expect(isMaterializableNpmArtifact(artifact)).toBe(true);
+    const legacyPublished = clone(ast);
+    const legacyArtifact = legacyPublished.artifacts[0]!;
+    if (legacyArtifact.kind !== 'npm') throw new Error('missing published npm fixture');
+    delete legacyArtifact.localExecution;
+    expect(validateCapabilityEntryDocument(legacyPublished)).toEqual({
+      valid: true,
+      errors: [],
+    });
+    expect(isMaterializableNpmArtifact(legacyArtifact)).toBe(false);
+
+    expect(artifact).toMatchObject({
+      kind: 'npm',
+      identifier: '@agent-tool-platform/ast-summarizer',
+      version: '0.1.1',
+      availability: 'published',
+      localExecution: {
+        schemaVersion: 1,
+        kind: 'node-package-bin',
+        bin: 'agent-tool-ast-summarizer',
+        integrity:
+          'sha512-KLP86c/Ylp+oqCTVHuZdHwql2GX4Xfai59UEXUjWrFpzq/l1vMlMPWz44jFgXNaavAmiVl07y73oplVwnKXRxw==',
+        lifecycleScripts: 'forbidden',
+      },
+    });
+    expect(artifact.kind === 'npm' ? artifact.localExecution?.integrity : undefined).not.toBe(
+      ast.source.revision,
+    );
   });
 
   it('represents local, remote, and hybrid bindings with one generic profile shape', async () => {
@@ -408,6 +447,79 @@ describe('registry semantic validation', () => {
     expect(result.valid).toBe(false);
     expect(result.errors.join('\n')).toContain('semantic version');
     expect(result.errors.join('\n')).toContain('repository-relative reference');
+  });
+
+  it.each(['../first-bin', '/absolute-bin', 'first bin', 'FirstBin'])(
+    'rejects unsafe or ambiguous npm executable selection %j',
+    async (bin) => {
+      const registry = await loadFirstPartyCapabilityRegistry();
+      const ast = clone(registry.capabilities.find((entry) => entry.id === 'ast-summarizer')!);
+      const artifact = ast.artifacts[0]!;
+      if (artifact.kind !== 'npm' || artifact.localExecution === undefined) {
+        throw new Error('missing AST local execution fixture');
+      }
+      artifact.localExecution.bin = bin;
+
+      expect(validateCapabilityEntryDocument(ast).errors.join('\n')).toMatch(
+        /npm bin name|Too small/iu,
+      );
+    },
+  );
+
+  it.each([
+    'sha512-not-base64',
+    `sha256:${'a'.repeat(64)}`,
+    `sha512-${'A'.repeat(85)}==`,
+    `sha512-${'A'.repeat(86)}=`,
+  ])('rejects malformed npm integrity %j', async (integrity) => {
+    const registry = await loadFirstPartyCapabilityRegistry();
+    const ast = clone(registry.capabilities.find((entry) => entry.id === 'ast-summarizer')!);
+    const artifact = ast.artifacts[0]!;
+    if (artifact.kind !== 'npm' || artifact.localExecution === undefined) {
+      throw new Error('missing AST local execution fixture');
+    }
+    artifact.localExecution.integrity = integrity;
+
+    expect(validateCapabilityEntryDocument(ast).errors.join('\n')).toContain(
+      'Subresource Integrity',
+    );
+  });
+
+  it('rejects implicit or allowed npm lifecycle-script execution', async () => {
+    const registry = await loadFirstPartyCapabilityRegistry();
+    const ast = clone(registry.capabilities.find((entry) => entry.id === 'ast-summarizer')!);
+    const artifact = ast.artifacts[0]!;
+    if (artifact.kind !== 'npm' || artifact.localExecution === undefined) {
+      throw new Error('missing AST local execution fixture');
+    }
+    Object.assign(artifact.localExecution, { lifecycleScripts: 'allowed' });
+
+    expect(validateCapabilityEntryDocument(ast).errors.join('\n')).toContain(
+      'Invalid input: expected "forbidden"',
+    );
+  });
+
+  it('allows future executable shape on a declared artifact but forbids fabricated immutable integrity', async () => {
+    const registry = await loadFirstPartyCapabilityRegistry();
+    const declared = clone(registry.capabilities.find((entry) => entry.id === 'doc-rag')!);
+    const artifact = declared.artifacts[0]!;
+    if (artifact.kind !== 'npm') throw new Error('missing declared npm fixture');
+    artifact.localExecution = {
+      schemaVersion: 1,
+      kind: 'node-package-bin',
+      bin: 'agent-tool-doc-rag',
+      lifecycleScripts: 'forbidden',
+    };
+
+    expect(validateCapabilityEntryDocument(declared)).toEqual({ valid: true, errors: [] });
+    expect(isMaterializableNpmArtifact(artifact)).toBe(false);
+
+    artifact.localExecution.integrity = `sha512-${'A'.repeat(86)}==`;
+    const result = validateCapabilityEntryDocument(declared);
+    expect(result.valid).toBe(false);
+    expect(result.errors.join('\n')).toContain(
+      'immutable integrity requires published availability',
+    );
   });
 
   it('rejects mutation-state inconsistencies', async () => {

@@ -28,6 +28,7 @@ Agent Kit owns:
 - environment-neutral readiness requirements;
 - host adapter generation;
 - deterministic preparation plans and a bounded environment driver contract;
+- verified, consumer-owned prepared artifact realizations; and
 - environment-specific prepared Agent Instance records and consumer-owned serialization.
 
 It does not execute capability tools, deploy providers, store registry data, collect telemetry, or
@@ -111,9 +112,11 @@ build.readiness; // machine-readable preparation requirements
 build.instanceIdentity; // immutable build/host seam for environment-specific identity
 ```
 
-The VS Code adapter uses exact package versions for local stdio servers and input placeholders for
-remote endpoints or named configuration. Declared-but-unpublished packages use offline launch mode
-and remain a Prepare requirement.
+The VS Code adapter uses exact package versions for portable local stdio launch intent and input
+placeholders for remote endpoints or named configuration. Declared-but-unpublished packages use
+offline launch mode and remain a Prepare requirement. A Build-time `npx` command is not proof of an
+environment-specific prepared executable: when Prepare returns a realization, host integration
+must consume that realization rather than writing the portable command unchanged.
 
 For remote HTTP bindings, Agent Kit carries the Registry's validated header name, configuration
 name, and safe literal prefix into the resolved execution binding. The VS Code adapter emits one
@@ -157,11 +160,13 @@ adapter can express it faithfully. Missing or unsupported transport semantics re
 Unauthenticated remote HTTP remains compatible, and local/hybrid stdio configuration continues to
 use environment-variable input references.
 
-Lock schema `2` persists the selected client mapping under the binding using only the header name,
-configuration name, and literal prefix. Registry entry digests also cover the complete source
-mapping. VS Code adapter schema `2` identifies the new compatibility and generated-header
-semantics. Configuration values, endpoint values, credentials, absolute local paths, and live
-provider identifiers never enter `agent.lock` or generated files.
+Lock schema `3` persists the selected client mapping and the portable local execution contract,
+including exact npm bin selection, immutable npm integrity, and lifecycle policy. Registry entry
+digests also cover the complete source mapping. This intentional schema change makes execution
+identity reproducible without putting an installation root or launch path in the lock. VS Code
+adapter schema `2` remains the Build-time adapter contract. Configuration values, endpoint values,
+credentials, absolute local paths, and live provider identifiers never enter `agent.lock` or
+generated Build files.
 
 ## Readiness
 
@@ -192,6 +197,7 @@ and host integration preparation. It is not a shell runner.
 
 ```ts
 import {
+  createNpmLocalArtifactPreparationDriver,
   createPreparationPlan,
   prepareAgent,
   serializePreparedAgentInstance,
@@ -208,11 +214,27 @@ const plan = createPreparationPlan(build, {
   readinessSnapshot,
 });
 
+const localArtifacts = createNpmLocalArtifactPreparationDriver({
+  root: consumerOwnedMaterializationRoot,
+  npmCliPath: trustedNpmCliModulePath,
+});
+
 const driver: PreparationDriver = {
   async execute(request) {
+    if (
+      request.action.kind === 'verify-local-artifact' ||
+      request.action.kind === 'make-local-artifact-available'
+    ) {
+      return localArtifacts.execute(request);
+    }
     if (request.action.kind === 'prepare-host-integration') {
-      await writeGeneratedHostFiles(request.generatedHostFiles);
-      return { status: 'success' };
+      await materializeHostFiles(request.generatedHostFiles, request.artifactRealizations);
+      const consumedArtifactRealizationIds = request.artifactRealizations.map(
+        (realization) => realization.realizationId,
+      );
+      return consumedArtifactRealizationIds.length === 0
+        ? { status: 'success' }
+        : { status: 'success', consumedArtifactRealizationIds };
     }
     return { status: 'setup-required' };
   },
@@ -227,6 +249,7 @@ const prepared = await prepareAgent(build, {
 prepared.plan; // the same deterministic preparation plan
 prepared.readiness; // reconciled through createReadinessPlan()
 prepared.instance; // environment-specific PreparedAgentInstance
+prepared.artifactRealizations; // consumer-owned verified launch evidence
 prepared.runnable; // true only when preparation produced READY
 prepared.setupRequirements; // bounded unresolved or unavailable actions
 
@@ -238,10 +261,12 @@ ordinary setup produces `NEEDS_SETUP`; concrete unavailable evidence can produce
 `DEGRADED` and `ACTIVE` are part of the shared instance state vocabulary for later runtime and
 telemetry updates, but H7 preparation does not manufacture either state.
 
-The readiness snapshot remains the semantic source of truth for binding readiness. Successful
-driver checks add only availability facts to an in-memory snapshot, after which Agent Kit calls
-`createReadinessPlan()` again. This keeps named configuration, local artifact availability, remote
-connectivity, and provider prerequisites in one readiness engine.
+The readiness snapshot remains the semantic source of truth for ordinary binding readiness.
+Successful driver checks add only availability facts to an in-memory snapshot, after which Agent
+Kit calls `createReadinessPlan()` again. A materializable local artifact is stricter: a claimed
+snapshot key chooses `verify-local-artifact`, but Agent Kit temporarily removes that claim and adds
+it back only after the driver returns matching verified realization evidence. This keeps one
+readiness engine without letting a bare binding key prove an exact executable.
 
 ### Local artifacts
 
@@ -249,12 +274,26 @@ Registry declaration is not environment availability. A `published` artifact, a
 `0.0.0-development` artifact, and a `declared` or `source-only` artifact all require explicit local
 environment evidence before a binding becomes ready.
 
-H7 does not include a reference npm installer. The current Registry identifies an exact package and
-version but does not define a portable executable/bin selection, package integrity, lifecycle
-script policy, or environment-owned installation layout. Those are the smallest additional
-contracts required to install and return a deterministic executable reference safely. Until they
-exist, a consumer driver may satisfy the generic local-artifact action, but Agent Kit never uses a
-global install, `npm link`, a sibling workspace, a floating version, or capability-specific rules.
+For a materializable npm artifact, the locked action carries the exact package, version, selected
+Node-package bin, npm SHA-512 integrity, and forbidden lifecycle-script policy. The bounded
+`createNpmLocalArtifactPreparationDriver()` bridges that portable contract to Runtime's reference
+materializer. The consumer supplies an explicit materialization root; Agent Kit assumes no home
+directory or Builder path.
+
+The driver returns a `PreparedArtifactRealization` only after Runtime verifies the exact archive
+and installation. Its portable fields are the locked binding/artifact identity, identity-derived
+layout reference, integrity, and lifecycle policy. Its environment-specific fields are the
+absolute Node executable, exact installed entrypoint, full installed-tree digest, file count, and
+byte count. It contains no secrets, endpoint values, arbitrary environment variables, prompts,
+workspace contents, or source code. The realization is returned in `PreparationResult`, not
+persisted in `AgentDefinition`, `agent.lock`, or `PreparedAgentInstance`.
+
+The v1 reference implementation handles only published npm Node-bin artifacts. An unsupported,
+unpublished, or incomplete artifact returns setup-required; concrete integrity, corruption, bound,
+or materialization failure returns unavailable. Agent Kit remains authoritative for action
+identity and the resulting H7 readiness. No global install, `npm link`, sibling checkout, floating
+top-level artifact version, capability-specific branch, arbitrary command, or implicit lifecycle
+script is used.
 
 ### Remote bindings
 
@@ -270,6 +309,14 @@ files to a consumer driver for validation or materialization and puts only porta
 content digests in the public preparation plan. Agent Kit does not choose repository ownership or
 an output root.
 
+For materialized local artifacts, that request also carries the verified
+`artifactRealizations`. A successful host result must acknowledge every realization ID exactly
+once. Agent Kit otherwise refuses to mark host integration ready, even if coarse host evidence said
+it was available. This is the next VS Code workspace seam: a host-specific layer must replace the
+portable Build-time package command with `launch.executablePath` and
+`launch.entrypointPath`, then return the consumed IDs. This milestone does not write a workspace or
+launch VS Code.
+
 ## Prepared Agent Instance persistence
 
 `PreparedAgentInstance` has its own schema version, currently
@@ -281,6 +328,11 @@ remain version 1 and are unchanged. The record contains:
 - host ID and adapter schema version;
 - mutable `preparedAt` and aggregate state;
 - binding identity, readiness state, and prepared state.
+
+Prepared executable realizations intentionally remain outside this record. They contain local
+absolute paths and belong to the consumer-owned environment evidence needed to materialize host
+files. Keeping them in `PreparationResult` preserves the existing portable, minimal, secret-free
+Prepared Agent Instance contract.
 
 `instanceId` is derived only from the existing immutable seam plus `environmentId`; `preparedAt`
 and all readiness state are excluded. Repeated preparation of the same build, host, and environment
@@ -294,6 +346,7 @@ schema rejects unknown fields, and the supported preparation API never serialize
 content, prompt text, configuration values, endpoint values, credentials, local absolute paths, or
 runtime activity.
 
-The additive public Prepare and Prepared Agent Instance API is a material v0 feature and should be
-released in the next lockstep Platform minor, **0.4.0**, after review. This repository keeps
+The Registry execution metadata, lock schema `3`, prepared realization, driver evidence, Runtime
+materializer, and Testkit conformance surfaces are a material public v0 feature. The recommended
+next lockstep Platform minor is **0.5.0** after review. This repository keeps
 `0.0.0-development` manifests until the tag-authoritative release workflow stamps a candidate.

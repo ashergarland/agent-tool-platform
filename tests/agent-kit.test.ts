@@ -490,7 +490,7 @@ describe('capability and binding resolution', () => {
         },
       ],
     });
-    expect(build.lock.schemaVersion).toBe(2);
+    expect(build.lock.schemaVersion).toBe(3);
     expect(build.lock.build.adapters).toEqual([{ id: 'vscode', schemaVersion: 2 }]);
     expect(build.lock.capabilities[0]?.binding.client).toEqual({
       http: {
@@ -672,12 +672,12 @@ describe('deterministic build outputs', () => {
       expect(first.actions.map((action) => action.kind)).toEqual([
         'make-local-artifact-available',
         'make-local-artifact-available',
-        'prepare-host-integration',
         'verify-configuration',
         'verify-configuration',
         'verify-provider-prerequisite',
         'verify-provider-prerequisite',
         'verify-remote-connection',
+        'prepare-host-integration',
       ]);
       expect(first.actions.every((action) => action.actionId.startsWith('sha256:'))).toBe(true);
       expect(text).not.toContain(build.definition.instructions);
@@ -1185,7 +1185,7 @@ describe('deterministic build outputs', () => {
     expect(() => serializeAgentLock(mutated)).toThrow(/invalid/u);
 
     const priorSchema = structuredClone(build.lock) as Record<string, unknown>;
-    priorSchema.schemaVersion = 1;
+    priorSchema.schemaVersion = 2;
     expect(() => serializeAgentLock(priorSchema)).toThrow(/invalid/u);
 
     const wrongArtifactKind = structuredClone(build.lock);

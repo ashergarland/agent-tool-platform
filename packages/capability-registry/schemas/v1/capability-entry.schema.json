@@ -10,7 +10,7 @@
       "type": "string",
       "const": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json"
     },
-    "schemaVersion": { "type": "string", "const": "1.1.0" },
+    "schemaVersion": { "type": "string", "const": "1.2.0" },
     "kind": { "type": "string", "const": "capability" },
     "id": { "$ref": "#/$defs/__schema0" },
     "displayName": { "$ref": "#/$defs/__schema1" },
@@ -55,8 +55,8 @@
     },
     "tags": { "minItems": 1, "type": "array", "items": { "$ref": "#/$defs/__schema0" } },
     "toolCount": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
-    "profiles": { "minItems": 1, "type": "array", "items": { "$ref": "#/$defs/__schema6" } },
-    "bindings": { "minItems": 1, "type": "array", "items": { "$ref": "#/$defs/__schema10" } },
+    "profiles": { "minItems": 1, "type": "array", "items": { "$ref": "#/$defs/__schema8" } },
+    "bindings": { "minItems": 1, "type": "array", "items": { "$ref": "#/$defs/__schema12" } },
     "stateChanging": { "type": "boolean" },
     "routing": {
       "type": "object",
@@ -105,9 +105,9 @@
         "metadata": {
           "type": "object",
           "properties": {
-            "server": { "$ref": "#/$defs/__schema5" },
-            "package": { "$ref": "#/$defs/__schema5" },
-            "profiles": { "$ref": "#/$defs/__schema5" }
+            "server": { "$ref": "#/$defs/__schema7" },
+            "package": { "$ref": "#/$defs/__schema7" },
+            "profiles": { "$ref": "#/$defs/__schema7" }
           },
           "required": ["server", "package"],
           "additionalProperties": false
@@ -153,29 +153,82 @@
       "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
     },
     "__schema4": {
-      "type": "object",
-      "properties": {
-        "id": { "$ref": "#/$defs/__schema0" },
-        "kind": { "type": "string", "enum": ["npm", "oci", "source"] },
-        "identifier": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^\\S+$" },
-        "version": { "$ref": "#/$defs/__schema3" },
-        "availability": { "type": "string", "enum": ["published", "declared", "source-only"] },
-        "reference": { "$ref": "#/$defs/__schema5" }
-      },
-      "required": ["id", "kind", "identifier", "version", "availability", "reference"],
-      "additionalProperties": false
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": { "$ref": "#/$defs/__schema0" },
+            "identifier": { "$ref": "#/$defs/__schema5" },
+            "version": { "$ref": "#/$defs/__schema3" },
+            "availability": { "$ref": "#/$defs/__schema6" },
+            "reference": { "$ref": "#/$defs/__schema7" },
+            "kind": { "type": "string", "const": "npm" },
+            "localExecution": {
+              "type": "object",
+              "properties": {
+                "schemaVersion": { "type": "number", "const": 1 },
+                "kind": { "type": "string", "const": "node-package-bin" },
+                "bin": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100,
+                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                },
+                "integrity": {
+                  "type": "string",
+                  "maxLength": 95,
+                  "pattern": "^sha512-[A-Za-z0-9+/]{86}==$"
+                },
+                "lifecycleScripts": { "type": "string", "const": "forbidden" }
+              },
+              "required": ["schemaVersion", "kind", "bin", "lifecycleScripts"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["id", "identifier", "version", "availability", "reference", "kind"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": { "$ref": "#/$defs/__schema0" },
+            "identifier": { "$ref": "#/$defs/__schema5" },
+            "version": { "$ref": "#/$defs/__schema3" },
+            "availability": { "$ref": "#/$defs/__schema6" },
+            "reference": { "$ref": "#/$defs/__schema7" },
+            "kind": { "type": "string", "const": "oci" }
+          },
+          "required": ["id", "identifier", "version", "availability", "reference", "kind"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": { "$ref": "#/$defs/__schema0" },
+            "identifier": { "$ref": "#/$defs/__schema5" },
+            "version": { "$ref": "#/$defs/__schema3" },
+            "availability": { "$ref": "#/$defs/__schema6" },
+            "reference": { "$ref": "#/$defs/__schema7" },
+            "kind": { "type": "string", "const": "source" }
+          },
+          "required": ["id", "identifier", "version", "availability", "reference", "kind"],
+          "additionalProperties": false
+        }
+      ]
     },
-    "__schema5": {
+    "__schema5": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^\\S+$" },
+    "__schema6": { "type": "string", "enum": ["published", "declared", "source-only"] },
+    "__schema7": {
       "type": "string",
       "minLength": 1,
       "maxLength": 500,
       "pattern": "^(?!\\/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))\\S+$"
     },
-    "__schema6": {
+    "__schema8": {
       "type": "object",
       "properties": {
         "id": { "$ref": "#/$defs/__schema0" },
-        "description": { "$ref": "#/$defs/__schema7" },
+        "description": { "$ref": "#/$defs/__schema9" },
         "source": {
           "type": "string",
           "enum": ["capability-profile-declaration", "registry-curated"]
@@ -199,7 +252,7 @@
         "permissions": {
           "type": "object",
           "properties": {
-            "summary": { "$ref": "#/$defs/__schema7" },
+            "summary": { "$ref": "#/$defs/__schema9" },
             "scopes": {
               "type": "array",
               "items": {
@@ -225,15 +278,15 @@
           "type": "object",
           "properties": {
             "setupRequired": { "type": "boolean" },
-            "summary": { "$ref": "#/$defs/__schema7" },
-            "requiredSecrets": { "type": "array", "items": { "$ref": "#/$defs/__schema8" } },
+            "summary": { "$ref": "#/$defs/__schema9" },
+            "requiredSecrets": { "type": "array", "items": { "$ref": "#/$defs/__schema10" } },
             "provider": {
               "type": "array",
               "items": {
                 "type": "object",
                 "properties": {
                   "id": { "$ref": "#/$defs/__schema0" },
-                  "description": { "$ref": "#/$defs/__schema7" }
+                  "description": { "$ref": "#/$defs/__schema9" }
                 },
                 "required": ["id", "description"],
                 "additionalProperties": false
@@ -246,8 +299,12 @@
         "readiness": {
           "type": "object",
           "properties": {
-            "signals": { "minItems": 1, "type": "array", "items": { "$ref": "#/$defs/__schema9" } },
-            "summary": { "$ref": "#/$defs/__schema7" }
+            "signals": {
+              "minItems": 1,
+              "type": "array",
+              "items": { "$ref": "#/$defs/__schema11" }
+            },
+            "summary": { "$ref": "#/$defs/__schema9" }
           },
           "required": ["signals", "summary"],
           "additionalProperties": false
@@ -272,10 +329,10 @@
       ],
       "additionalProperties": false
     },
-    "__schema7": { "type": "string", "minLength": 1, "maxLength": 1000, "pattern": "\\S" },
-    "__schema8": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$" },
-    "__schema9": { "type": "string", "enum": ["process", "workload", "provider"] },
-    "__schema10": {
+    "__schema9": { "type": "string", "minLength": 1, "maxLength": 1000, "pattern": "\\S" },
+    "__schema10": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$" },
+    "__schema11": { "type": "string", "enum": ["process", "workload", "provider"] },
+    "__schema12": {
       "type": "object",
       "properties": {
         "id": { "$ref": "#/$defs/__schema0" },
@@ -293,7 +350,7 @@
                   "minItems": 1,
                   "maxItems": 50,
                   "type": "array",
-                  "items": { "$ref": "#/$defs/__schema11" }
+                  "items": { "$ref": "#/$defs/__schema13" }
                 }
               },
               "required": ["headers"],
@@ -307,7 +364,7 @@
       "required": ["id", "profileId", "artifactId", "interface", "availability"],
       "additionalProperties": false
     },
-    "__schema11": {
+    "__schema13": {
       "type": "object",
       "properties": {
         "name": {
@@ -320,7 +377,7 @@
           "type": "object",
           "properties": {
             "source": { "type": "string", "const": "configuration" },
-            "name": { "$ref": "#/$defs/__schema8" },
+            "name": { "$ref": "#/$defs/__schema10" },
             "prefix": {
               "type": "string",
               "maxLength": 100,

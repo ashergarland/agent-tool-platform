@@ -15,6 +15,11 @@ import {
 } from './instance.js';
 import { digestAgentLock, serializeAgentLock } from './lock.js';
 import {
+  artifactPreparationBindingSchema,
+  preparedArtifactRealizationSchema,
+  type PreparedArtifactRealization,
+} from './prepared-artifact.js';
+import {
   createReadinessPlan,
   readinessPlanSchema,
   readinessSnapshotSchema,
@@ -30,6 +35,8 @@ import {
   agentDefinitionSchema,
   agentLockSchema,
   exactVersionSchema,
+  isMaterializableResolvedNpmArtifact,
+  profileIdentifierSchema,
   resolvedCapabilityArtifactSchema,
   sha256DigestSchema,
   stableIdentifierSchema,
@@ -40,13 +47,7 @@ import {
 
 export const PREPARATION_SCHEMA_VERSION = 1;
 
-const bindingTargetSchema = z.strictObject({
-  key: z.string().min(1).max(600).regex(/^\S+$/u),
-  capabilityId: stableIdentifierSchema,
-  capabilityVersion: exactVersionSchema,
-  profileId: z.string().min(1).max(100),
-  mode: z.enum(['local', 'remote', 'hybrid']),
-});
+const bindingTargetSchema = artifactPreparationBindingSchema;
 
 const actionCommonShape = {
   actionId: sha256DigestSchema,
@@ -146,11 +147,16 @@ export const preparationPlanSchema = z
 
 export const preparationDriverResultSchema = z.strictObject({
   status: z.enum(['success', 'already-ready', 'setup-required', 'unavailable']),
+  reason: profileIdentifierSchema.optional(),
+  artifactRealization: preparedArtifactRealizationSchema.optional(),
+  consumedArtifactRealizationIds: z.array(sha256DigestSchema).max(64).optional(),
 });
 
 export const preparationActionResultSchema = z.strictObject({
   actionId: sha256DigestSchema,
   status: z.enum(['success', 'already-ready', 'setup-required', 'unavailable']),
+  reason: profileIdentifierSchema.optional(),
+  artifactRealizationId: sha256DigestSchema.optional(),
 });
 
 export const preparationHostIntegrationEvidenceSchema = z.enum([
@@ -182,6 +188,7 @@ export type PreparationDriverRequest =
       readonly environmentId: string;
       readonly action: HostIntegrationAction;
       readonly generatedHostFiles: readonly GeneratedHostFile[];
+      readonly artifactRealizations: readonly PreparedArtifactRealization[];
     };
 
 export interface PreparationDriver {
@@ -207,6 +214,7 @@ export interface PrepareAgentOptions extends PreparationPlanOptions {
 export interface PreparationSetupRequirement {
   readonly action: PreparationAction;
   readonly status: 'setup-required' | 'unavailable';
+  readonly reason?: string;
 }
 
 export interface PreparationResult {
@@ -215,6 +223,7 @@ export interface PreparationResult {
   readonly readiness: ReadinessPlan;
   readonly plan: PreparationPlan;
   readonly actionResults: readonly PreparationActionResult[];
+  readonly artifactRealizations: readonly PreparedArtifactRealization[];
   readonly hostIntegration: PreparationActionResult;
   readonly runnable: boolean;
   readonly setupRequirements: readonly PreparationSetupRequirement[];
@@ -658,6 +667,12 @@ const addActionId = <T extends Omit<PreparationAction, 'actionId'>>(
 });
 
 const actionSortKey = (action: PreparationAction): string => {
+  const phase =
+    action.kind === 'verify-local-artifact' || action.kind === 'make-local-artifact-available'
+      ? '0'
+      : action.kind === 'prepare-host-integration'
+        ? '2'
+        : '1';
   const bindingKey = 'binding' in action ? action.binding.key : '';
   const detail =
     action.kind === 'verify-configuration'
@@ -665,7 +680,7 @@ const actionSortKey = (action: PreparationAction): string => {
       : action.kind === 'verify-provider-prerequisite'
         ? action.prerequisiteId
         : '';
-  return `${action.kind}\u0000${bindingKey}\u0000${detail}`;
+  return `${phase}\u0000${action.kind}\u0000${bindingKey}\u0000${detail}`;
 };
 
 const createPlanFromValidated = (
@@ -779,10 +794,12 @@ const evidenceStatusFor = (
   action: PreparationAction,
   snapshot: NormalizedReadinessSnapshot,
   hostIntegration: PreparationHostIntegrationEvidence,
+  artifactRealizations: readonly PreparedArtifactRealization[],
 ): 'already-ready' | 'unavailable' | undefined => {
   switch (action.kind) {
     case 'verify-local-artifact':
     case 'make-local-artifact-available':
+      if (isMaterializableResolvedNpmArtifact(action.artifact)) return undefined;
       return snapshot.availableLocalBindings.includes(action.binding.key)
         ? 'already-ready'
         : undefined;
@@ -801,6 +818,7 @@ const evidenceStatusFor = (
         ? 'already-ready'
         : undefined;
     case 'prepare-host-integration':
+      if (artifactRealizations.length > 0) return undefined;
       return hostIntegration === 'available'
         ? 'already-ready'
         : hostIntegration === 'unavailable'
@@ -855,10 +873,130 @@ const requestFor = (
   action: PreparationAction,
   environmentId: string,
   generatedHostFiles: readonly GeneratedHostFile[],
+  artifactRealizations: readonly PreparedArtifactRealization[],
 ): PreparationDriverRequest =>
   action.kind === 'prepare-host-integration'
-    ? { environmentId, action, generatedHostFiles }
+    ? { environmentId, action, generatedHostFiles, artifactRealizations }
     : { environmentId, action };
+
+interface ExecutedPreparationAction {
+  readonly result: PreparationActionResult;
+  readonly artifactRealization?: PreparedArtifactRealization;
+}
+
+const positiveStatus = (
+  status: PreparationDriverResult['status'],
+): status is 'success' | 'already-ready' => status === 'success' || status === 'already-ready';
+
+const invalidDriverEvidence = (action: PreparationAction, issue: string): never => {
+  throw new AgentKitError(
+    'INVALID_PREPARATION_RESULT',
+    `Preparation driver returned inconsistent evidence for ${action.kind}.`,
+    [issue],
+  );
+};
+
+const validateDriverEvidence = (
+  action: PreparationAction,
+  driverResult: PreparationDriverResult,
+  artifactRealizations: readonly PreparedArtifactRealization[],
+): PreparedArtifactRealization | undefined => {
+  if (!positiveStatus(driverResult.status)) {
+    if (
+      driverResult.artifactRealization !== undefined ||
+      driverResult.consumedArtifactRealizationIds !== undefined
+    ) {
+      return invalidDriverEvidence(action, 'unsuccessful actions must not return ready evidence');
+    }
+    return undefined;
+  }
+  if (driverResult.reason !== undefined) {
+    return invalidDriverEvidence(action, 'successful actions must not return a failure reason');
+  }
+
+  if (action.kind === 'verify-local-artifact' || action.kind === 'make-local-artifact-available') {
+    if (driverResult.consumedArtifactRealizationIds !== undefined) {
+      return invalidDriverEvidence(
+        action,
+        'local artifact actions must not return host-consumption evidence',
+      );
+    }
+    if (!isMaterializableResolvedNpmArtifact(action.artifact)) {
+      if (driverResult.artifactRealization !== undefined) {
+        return invalidDriverEvidence(
+          action,
+          'a non-materializable artifact must not produce a prepared realization',
+        );
+      }
+      return undefined;
+    }
+    const realization = driverResult.artifactRealization;
+    if (realization === undefined) {
+      return invalidDriverEvidence(
+        action,
+        'a materializable local artifact requires a verified executable realization',
+      );
+    }
+    if (
+      digestCanonicalJson(realization.binding) !== digestCanonicalJson(action.binding) ||
+      digestCanonicalJson(realization.artifact) !== digestCanonicalJson(action.artifact)
+    ) {
+      return invalidDriverEvidence(
+        action,
+        'the prepared realization does not match the planned binding and artifact',
+      );
+    }
+    const expectedDisposition =
+      driverResult.status === 'success' ? 'newly-materialized' : 'already-materialized';
+    if (realization.disposition !== expectedDisposition) {
+      return invalidDriverEvidence(
+        action,
+        'the prepared realization disposition does not match the driver status',
+      );
+    }
+    return realization;
+  }
+
+  if (driverResult.artifactRealization !== undefined) {
+    return invalidDriverEvidence(
+      action,
+      'only local artifact actions may return a prepared realization',
+    );
+  }
+  if (action.kind === 'prepare-host-integration') {
+    const expected = artifactRealizations
+      .map((realization) => realization.realizationId)
+      .sort(compareCodeUnits);
+    const consumed = driverResult.consumedArtifactRealizationIds;
+    if (expected.length === 0) {
+      if (consumed !== undefined) {
+        return invalidDriverEvidence(
+          action,
+          'host consumption evidence is only valid for prepared artifact realizations',
+        );
+      }
+      return undefined;
+    }
+    const actual = [...(consumed ?? [])].sort(compareCodeUnits);
+    if (
+      new Set(actual).size !== actual.length ||
+      digestCanonicalJson(actual) !== digestCanonicalJson(expected)
+    ) {
+      return invalidDriverEvidence(
+        action,
+        'host integration did not consume every prepared artifact realization exactly once',
+      );
+    }
+    return undefined;
+  }
+  if (driverResult.consumedArtifactRealizationIds !== undefined) {
+    return invalidDriverEvidence(
+      action,
+      'only host integration may return artifact-consumption evidence',
+    );
+  }
+  return undefined;
+};
 
 const executeAction = async (
   action: PreparationAction,
@@ -866,18 +1004,33 @@ const executeAction = async (
   snapshot: NormalizedReadinessSnapshot,
   driver: PreparationDriver | undefined,
   generatedHostFiles: readonly GeneratedHostFile[],
-): Promise<PreparationActionResult> => {
-  const evidenceStatus = evidenceStatusFor(action, snapshot, options.hostIntegration);
+  artifactRealizations: readonly PreparedArtifactRealization[],
+): Promise<ExecutedPreparationAction> => {
+  if (
+    (action.kind === 'verify-local-artifact' || action.kind === 'make-local-artifact-available') &&
+    isMaterializableResolvedNpmArtifact(action.artifact)
+  ) {
+    const claimedIndex = snapshot.availableLocalBindings.indexOf(action.binding.key);
+    if (claimedIndex >= 0) snapshot.availableLocalBindings.splice(claimedIndex, 1);
+  }
+  const evidenceStatus = evidenceStatusFor(
+    action,
+    snapshot,
+    options.hostIntegration,
+    artifactRealizations,
+  );
   if (evidenceStatus !== undefined) {
-    return { actionId: action.actionId, status: evidenceStatus };
+    return { result: { actionId: action.actionId, status: evidenceStatus } };
   }
   if (driver === undefined) {
-    return { actionId: action.actionId, status: 'setup-required' };
+    return { result: { actionId: action.actionId, status: 'setup-required' } };
   }
 
   let candidate: unknown;
   try {
-    candidate = await driver.execute(requestFor(action, options.environmentId, generatedHostFiles));
+    candidate = await driver.execute(
+      requestFor(action, options.environmentId, generatedHostFiles, artifactRealizations),
+    );
   } catch {
     throw new AgentKitError(
       'PREPARATION_FAILED',
@@ -895,10 +1048,21 @@ const executeAction = async (
     );
   }
   const driverResult = parsed.data;
-  if (driverResult.status === 'success' || driverResult.status === 'already-ready') {
+  const artifactRealization = validateDriverEvidence(action, driverResult, artifactRealizations);
+  if (positiveStatus(driverResult.status)) {
     recordSuccessfulAction(snapshot, action);
   }
-  return { actionId: action.actionId, status: driverResult.status };
+  return {
+    result: {
+      actionId: action.actionId,
+      status: driverResult.status,
+      ...(driverResult.reason === undefined ? {} : { reason: driverResult.reason }),
+      ...(artifactRealization === undefined
+        ? {}
+        : { artifactRealizationId: artifactRealization.realizationId }),
+    },
+    ...(artifactRealization === undefined ? {} : { artifactRealization }),
+  };
 };
 
 const preparedAt = (clock: PreparationClock | undefined): string => {
@@ -939,10 +1103,20 @@ export const prepareAgent = async (
   const plan = createPlanFromValidated(build, options);
   const snapshot = cloneSnapshot(options.readinessSnapshot);
   const actionResults: PreparationActionResult[] = [];
+  const artifactRealizations: PreparedArtifactRealization[] = [];
   for (const action of plan.actions) {
-    actionResults.push(
-      await executeAction(action, options, snapshot, optionsInput.driver, build.generatedHostFiles),
+    const executed = await executeAction(
+      action,
+      options,
+      snapshot,
+      optionsInput.driver,
+      build.generatedHostFiles,
+      artifactRealizations,
     );
+    actionResults.push(executed.result);
+    if (executed.artifactRealization !== undefined) {
+      artifactRealizations.push(executed.artifactRealization);
+    }
   }
 
   const resolution: AgentResolution = {
@@ -1018,7 +1192,10 @@ export const prepareAgent = async (
   const setupRequirements = plan.actions.flatMap(
     (action): readonly PreparationSetupRequirement[] => {
       const status = resultsById.get(action.actionId)?.status;
-      return status === 'setup-required' || status === 'unavailable' ? [{ action, status }] : [];
+      const reason = resultsById.get(action.actionId)?.reason;
+      return status === 'setup-required' || status === 'unavailable'
+        ? [{ action, status, ...(reason === undefined ? {} : { reason }) }]
+        : [];
     },
   );
 
@@ -1028,6 +1205,7 @@ export const prepareAgent = async (
     readiness,
     plan,
     actionResults,
+    artifactRealizations,
     hostIntegration,
     runnable: state === 'READY',
     setupRequirements,

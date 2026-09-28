@@ -37,6 +37,8 @@ export default tseslint.config(
       'eslint.config.js',
       'scripts/**/*.mjs',
       'apps/*/scripts/**/*.mjs',
+      'tests/fixtures/local-artifact-package/**/*.mjs',
+      'tests/fixtures/local-artifact-package/**/*.cjs',
       'packages/runtime/bin/*.js',
       'openapi.fixture.json',
     ],

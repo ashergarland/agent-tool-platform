@@ -25,6 +25,8 @@ export {
   agentLockSchema,
   capabilitySelectionSchema,
   exactVersionSchema,
+  isMaterializableResolvedNpmArtifact,
+  materializableResolvedNpmArtifactSchema,
   profileIdentifierSchema,
   publicReferenceSchema,
   resolvedCapabilityArtifactSchema,
@@ -33,6 +35,7 @@ export {
   type AgentDefinition,
   type AgentLock,
   type CapabilitySelection,
+  type MaterializableResolvedNpmArtifact,
   type ResolvedCapabilityArtifact,
 } from './schemas.js';
 export { parseAgentDefinition } from './model.js';
@@ -84,6 +87,17 @@ export {
   type PreparedAgentInstanceIdentity,
 } from './instance.js';
 export {
+  PREPARED_ARTIFACT_REALIZATION_SCHEMA_VERSION,
+  artifactPreparationBindingSchema,
+  createPreparedArtifactRealization,
+  preparedArtifactRealizationSchema,
+  preparedNodeLaunchSchema,
+  type ArtifactPreparationBinding,
+  type CreatePreparedArtifactRealizationInput,
+  type PreparedArtifactRealization,
+  type PreparedNodeLaunch,
+} from './prepared-artifact.js';
+export {
   PREPARATION_SCHEMA_VERSION,
   createPreparationPlan,
   prepareAgent,
@@ -105,6 +119,10 @@ export {
   type PreparationSetupRequirement,
   type PrepareAgentOptions,
 } from './preparation.js';
+export {
+  createNpmLocalArtifactPreparationDriver,
+  type NpmLocalArtifactPreparationDriverOptions,
+} from './local-artifacts.js';
 export {
   type GeneratedHostFile,
   type HostAdapter,

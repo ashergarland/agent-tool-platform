@@ -114,6 +114,51 @@ transport. Profiles continue to describe what configuration and preparation are 
 embedding host behavior. Host adapters consume the validated mapping through Agent Kit and may
 accept it only when they can represent it faithfully.
 
+### Local executable artifacts
+
+Registry schema `1.2.0` adds the optional, versioned `localExecution` contract to npm artifacts.
+The change is additive: an older entry shape without `localExecution` remains valid, but it is not
+materializable through the v1 reference materializer.
+
+```json
+{
+  "kind": "npm",
+  "identifier": "@example/capability",
+  "version": "1.2.3",
+  "availability": "published",
+  "localExecution": {
+    "schemaVersion": 1,
+    "kind": "node-package-bin",
+    "bin": "example-capability",
+    "integrity": "sha512-...",
+    "lifecycleScripts": "forbidden"
+  }
+}
+```
+
+The package name and exact version identify the npm artifact. `bin` selects one exact executable;
+consumers must not guess the package name, choose the first bin, or inspect host shims to infer it.
+The v1 executable kind is intentionally narrow: it describes a Node npm-package bin, not a generic
+arbitrary command.
+
+`integrity` is one canonical SHA-512 Subresource Integrity value matching npm's published tarball
+integrity. It is distinct from both `source.revision` (the source Git commit) and Agent Kit's
+Registry-entry digest (the consumed metadata record). A non-published artifact may declare the
+future bin and lifecycle policy, but validation rejects immutable integrity on `declared` or
+`source-only` availability. No integrity is fabricated for unpublished packages.
+
+Artifact availability and environment materializability are separate:
+
+- `published` means a distribution artifact is declared as published; it does not mean installed;
+- a v1 npm artifact is materializable only when it is published and carries the exact bin,
+  canonical integrity, and `lifecycleScripts: "forbidden"` contract; and
+- environment readiness is established later by Agent Kit Prepare from verified realization
+  evidence.
+
+The first-party AST Summarizer entry carries authoritative npm `0.1.1` bin and tarball integrity
+metadata. The five unpublished flagship npm entries remain declared/development artifacts and do
+not become materializable through this schema addition.
+
 Six entries normalize their authoritative `capability-profiles.json`. AST Summarizer predates that
 declaration, so its local profile is marked `registry-curated` and references its pinned
 server/package/release metadata instead of pretending a source declaration exists.
@@ -131,7 +176,8 @@ npm run registry:validate
 Normal validation is deterministic and offline. It rejects unsupported schema versions, duplicate
 identities, malformed versions/artifacts/profiles, invalid profile or artifact references,
 six-dimension mismatches, incomplete or invalid HTTP client mappings, inconsistent mutation
-effects, stale generated output, and account-specific/private data.
+effects, malformed executable selections or npm integrity, stale generated output, and
+account-specific/private data.
 
 Optional development/CI drift checks receive explicit local checkout paths and do not fetch:
 
@@ -144,7 +190,10 @@ npm run registry:verify-sources -- `
 The command verifies each supplied checkout against its registry entry. Supplying every registry
 entry performs a complete source drift check. It verifies pinned revisions, server/package identity
 and version metadata, tag-stamped release versions, artifact declarations, and normalized source
-profiles. No local paths are written into registry data.
+profiles. When local execution metadata is present, it also checks that source package metadata
+declares the selected bin. npm tarball integrity is registry-distribution evidence and is therefore
+not derived from or equated with the source Git revision. No local paths are written into registry
+data.
 
 ## Public/private boundary
 
