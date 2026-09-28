@@ -71,6 +71,26 @@ bounds file count and size, rejects unexpected file types and filename/record id
 and validates every record with `parsePreparedAgentInstance()`. Invalid records are isolated and
 reported through bounded counts/warnings; storage paths and raw local diagnostics are not exposed.
 
+Filesystem confinement follows the Runtime `RootBoundary` model. Reads validate a regular-file
+descriptor against the addressed and canonical paths with non-zero device/inode identity, repeat
+the final addressed-path check, and consume bounded bytes from that same descriptor. Writes keep
+validated state-root and instances-directory descriptors open, validate the temporary file and any
+existing target before replacement, and validate the persisted identity and canonical contents
+after replacement. Stable pre-existing symlinks, Windows junctions represented by Node as
+symlinks, canonical escapes, and identity changes observed at those checks fail closed.
+
+Windows has a narrower guarantee against an actively racing same-user process. Node 22 exposes
+neither `O_NOFOLLOW` nor a directory-handle-relative `renameat`/replace operation, and Windows does
+not permit the existing target handle to remain open across replacement. Builder must therefore
+close the validated target and call path-based `rename()`. A process that can concurrently mutate
+the state directory can still replace a final component or ancestor after the last pre-replacement
+identity check and before that OS operation. Post-replacement validation detects an observed
+mismatch but cannot make the destination operation descriptor-anchored retroactively. This matches
+the Runtime's documented weaker Windows `RootBoundary` threat model. Directory creation and failed
+temporary-file cleanup are also path-based and have the same active-racer limitation despite their
+surrounding identity checks. Builder does not claim race-free filesystem mutation against such an
+active same-user attacker.
+
 There is no secondary index. A repeated Prepare of the same Build, host, and environment reads the
 stored instance back into Agent Kit and updates the same record. A different lock/Build or
 environment produces a different Agent Kit instance ID and may coexist. One canonical agent can

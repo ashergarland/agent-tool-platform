@@ -1,4 +1,15 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -25,6 +36,20 @@ const temporaryRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-builder-instance-store-'));
   temporaryRoots.push(root);
   return root;
+};
+
+const createFileSymlink = async (target: string, path: string): Promise<boolean> => {
+  try {
+    await symlink(target, path, 'file');
+    return true;
+  } catch (error) {
+    const permissionUnavailable =
+      error instanceof Error &&
+      'code' in error &&
+      (error.code === 'EPERM' || error.code === 'EACCES');
+    if (permissionUnavailable && process.env['ATP_SYMLINK_TESTS_REQUIRED'] !== '1') return false;
+    throw error;
+  }
 };
 
 afterEach(async () => {
@@ -259,6 +284,7 @@ describe('Builder filesystem Agent Instance store', () => {
 
     expect(discovery.instances).toEqual([valid]);
     expect(discovery.diagnostics.invalidRecordCount).toBe(1);
+    await expect(store.get(digest('1'))).rejects.toBeInstanceOf(BuilderInstanceStoreError);
   });
 
   it('rejects an instances directory that is itself a symlink', async () => {
@@ -274,6 +300,185 @@ describe('Builder filesystem Agent Instance store', () => {
     await expect(store.list()).rejects.toBeInstanceOf(BuilderInstanceStoreError);
     await expect(store.put(preparedInstance())).rejects.toBeInstanceOf(BuilderInstanceStoreError);
   });
+
+  it('reads bounded contents from the validated descriptor after its path is replaced', async () => {
+    const root = await temporaryRoot();
+    const original = preparedInstance();
+    const replacement = preparedInstance({
+      preparedAt: '2026-09-27T13:00:00.000Z',
+      state: 'READY',
+    });
+    const initialStore = createFileSystemBuilderInstanceStore({ stateRoot: root });
+    await initialStore.put(original);
+    const movedPath = join(root, 'instances', '.opened-record');
+    let replaced = false;
+    const store = createFileSystemBuilderInstanceStore({
+      stateRoot: root,
+      fileSystemHooks: {
+        afterReadDescriptorValidated: async (recordPath) => {
+          if (replaced) return;
+          replaced = true;
+          await rename(recordPath, movedPath);
+          await writeFile(recordPath, serializePreparedAgentInstance(replacement), 'utf8');
+        },
+      },
+    });
+
+    await expect(store.get(original.instanceId)).resolves.toEqual(original);
+    expect(replaced).toBe(true);
+    expect(
+      parsePreparedAgentInstance(
+        await readFile(join(root, 'instances', instanceFileName(original.instanceId)), 'utf8'),
+      ),
+    ).toEqual(replacement);
+  });
+
+  it('verifies temporary-file identity and detects path replacement before rename', async () => {
+    const root = await temporaryRoot();
+    const original = preparedInstance();
+    const updated = preparedInstance({
+      preparedAt: '2026-09-27T13:00:00.000Z',
+      state: 'READY',
+    });
+    const initialStore = createFileSystemBuilderInstanceStore({ stateRoot: root });
+    await initialStore.put(original);
+    let temporaryIdentityChecked = false;
+    const store = createFileSystemBuilderInstanceStore({
+      stateRoot: root,
+      fileSystemHooks: {
+        afterTemporaryFileValidated: async (temporaryPath) => {
+          const descriptor = await open(temporaryPath, 'r');
+          try {
+            const opened = await descriptor.stat({ bigint: true });
+            const addressed = await lstat(temporaryPath, { bigint: true });
+            expect(opened.dev).not.toBe(0n);
+            expect(opened.ino).not.toBe(0n);
+            expect(addressed.dev).toBe(opened.dev);
+            expect(addressed.ino).toBe(opened.ino);
+            temporaryIdentityChecked = true;
+          } finally {
+            await descriptor.close();
+          }
+          await rename(temporaryPath, `${temporaryPath}.moved`);
+          await writeFile(temporaryPath, serializePreparedAgentInstance(updated), 'utf8');
+        },
+      },
+    });
+
+    await expect(store.put(updated)).rejects.toBeInstanceOf(BuilderInstanceStoreError);
+    expect(temporaryIdentityChecked).toBe(true);
+    await expect(initialStore.get(original.instanceId)).resolves.toEqual(original);
+  });
+
+  it('preserves the old record and removes its temporary file on a pre-rename failure', async () => {
+    const root = await temporaryRoot();
+    const original = preparedInstance();
+    const updated = preparedInstance({
+      preparedAt: '2026-09-27T13:00:00.000Z',
+      state: 'READY',
+    });
+    const initialStore = createFileSystemBuilderInstanceStore({ stateRoot: root });
+    await initialStore.put(original);
+    const store = createFileSystemBuilderInstanceStore({
+      stateRoot: root,
+      fileSystemHooks: {
+        beforeAtomicReplace: () => {
+          throw new Error('injected pre-rename failure');
+        },
+      },
+    });
+
+    await expect(store.put(updated)).rejects.toBeInstanceOf(BuilderInstanceStoreError);
+    await expect(initialStore.get(original.instanceId)).resolves.toEqual(original);
+    expect(
+      (await readdir(join(root, 'instances'))).filter((name) => name.endsWith('.tmp')),
+    ).toEqual([]);
+  });
+
+  it('rejects a stable target reparse point before replacement', async () => {
+    const root = await temporaryRoot();
+    const outside = await temporaryRoot();
+    const instance = preparedInstance();
+    const instancesDirectory = join(root, 'instances');
+    await mkdir(instancesDirectory, { recursive: true });
+    await symlink(
+      outside,
+      join(instancesDirectory, instanceFileName(instance.instanceId)),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const store = createFileSystemBuilderInstanceStore({ stateRoot: root });
+
+    await expect(store.put(instance)).rejects.toBeInstanceOf(BuilderInstanceStoreError);
+  });
+
+  it('rejects stable file symlink records and targets when supported', async () => {
+    const root = await temporaryRoot();
+    const outside = await temporaryRoot();
+    const instance = preparedInstance();
+    const instancesDirectory = join(root, 'instances');
+    await mkdir(instancesDirectory, { recursive: true });
+    const outsideRecord = join(outside, 'outside-record.json');
+    await writeFile(outsideRecord, serializePreparedAgentInstance(instance), 'utf8');
+    const linkedRecord = join(instancesDirectory, `${'1'.repeat(64)}.json`);
+    if (!(await createFileSymlink(outsideRecord, linkedRecord))) return;
+    const store = createFileSystemBuilderInstanceStore({ stateRoot: root });
+
+    await expect(store.get(digest('1'))).rejects.toBeInstanceOf(BuilderInstanceStoreError);
+    await rm(linkedRecord);
+    expect(
+      await createFileSymlink(
+        outsideRecord,
+        join(instancesDirectory, instanceFileName(instance.instanceId)),
+      ),
+    ).toBe(true);
+    await expect(store.put(instance)).rejects.toBeInstanceOf(BuilderInstanceStoreError);
+  });
+
+  it('detects replacement of the instances directory before the final rename', async () => {
+    const root = await temporaryRoot();
+    const movedDirectory = join(root, 'moved-instances');
+    const store = createFileSystemBuilderInstanceStore({
+      stateRoot: root,
+      fileSystemHooks: {
+        beforeAtomicReplace: async () => {
+          await rename(join(root, 'instances'), movedDirectory);
+          await mkdir(join(root, 'instances'));
+        },
+      },
+    });
+
+    await expect(store.put(preparedInstance())).rejects.toBeInstanceOf(BuilderInstanceStoreError);
+    expect(await readdir(join(root, 'instances'))).toEqual([]);
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'uses non-zero matching Windows identity and replaces a record normally',
+    async () => {
+      const root = await temporaryRoot();
+      const original = preparedInstance();
+      const updated = preparedInstance({
+        preparedAt: '2026-09-27T13:00:00.000Z',
+        state: 'READY',
+      });
+      const store = createFileSystemBuilderInstanceStore({ stateRoot: root });
+      await store.put(original);
+      await store.put(updated);
+      const recordPath = join(root, 'instances', instanceFileName(original.instanceId));
+      const descriptor = await open(recordPath, 'r');
+      try {
+        const opened = await descriptor.stat({ bigint: true });
+        const addressed = await lstat(recordPath, { bigint: true });
+        expect(opened.dev).not.toBe(0n);
+        expect(opened.ino).not.toBe(0n);
+        expect(addressed.dev).toBe(opened.dev);
+        expect(addressed.ino).toBe(opened.ino);
+      } finally {
+        await descriptor.close();
+      }
+      await expect(store.get(original.instanceId)).resolves.toEqual(updated);
+      expect(await readFile(recordPath, 'utf8')).toBe(serializePreparedAgentInstance(updated));
+    },
+  );
 
   it('stores only the canonical PreparedAgentInstance privacy surface', async () => {
     const root = await temporaryRoot();
