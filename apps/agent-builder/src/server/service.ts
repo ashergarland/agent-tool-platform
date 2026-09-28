@@ -3,6 +3,7 @@ import {
   READINESS_SCHEMA_VERSION,
   buildVsCodeAgent,
   createPreparationPlan as createAgentKitPreparationPlan,
+  parsePreparedAgentInstance,
   prepareAgent as prepareAgentWithAgentKit,
   type AgentBuild,
   type AgentInstanceState,
@@ -13,6 +14,7 @@ import {
   type PreparationHostIntegrationEvidence,
   type PreparationPlan,
   type PreparationResult,
+  type PreparedAgentInstance,
   type ReadinessSnapshot,
   type VsCodeAdapterOutput,
 } from '@agent-tool-platform/agent-kit';
@@ -29,6 +31,8 @@ import {
   type CapabilityCatalogItem,
   type CapabilityCatalogResponse,
   type GeneratedArtifact,
+  type LocalAgentInstance,
+  type LocalAgentInstanceDiscoveryResponse,
   type PrepareActionResultPresentation,
   type PrepareAgentResult,
   type PreparationActionPresentation,
@@ -36,13 +40,21 @@ import {
 } from '../shared/contracts.js';
 import {
   asBuildServiceError,
+  asInstanceDiscoveryServiceError,
+  asInstanceStorageServiceError,
   asPreparationServiceError,
   asRegistryServiceError,
   BuilderServiceError,
 } from './errors.js';
+import {
+  BuilderInstanceStoreError,
+  createFileSystemBuilderInstanceStore,
+  type BuilderInstanceStore,
+} from './instance-store.js';
 
 export interface BuilderService {
   listCapabilities(this: void): Promise<CapabilityCatalogResponse>;
+  listInstances(this: void): Promise<LocalAgentInstanceDiscoveryResponse>;
   buildAgent(this: void, definition: unknown): Promise<BuildAgentResult>;
   prepareAgent(this: void, request: BuilderPrepareInput): Promise<PrepareAgentResult>;
 }
@@ -61,7 +73,6 @@ export interface BuilderPreparationEnvironment {
   readonly hostIntegration: PreparationHostIntegrationEvidence;
   readonly driver?: PreparationDriver;
   readonly clock?: PreparationClock;
-  readonly existingInstance?: unknown;
 }
 
 export interface BuilderPreparationApi {
@@ -71,6 +82,7 @@ export interface BuilderPreparationApi {
 
 export interface BuilderServiceOptions {
   readonly loadRegistry?: () => Promise<CapabilityRegistry>;
+  readonly instanceStore?: BuilderInstanceStore;
   readonly preparationEnvironment?: BuilderPreparationEnvironment;
   readonly preparationApi?: BuilderPreparationApi;
 }
@@ -268,6 +280,35 @@ const preparedInstanceState = (state: AgentInstanceState): PreparedInstanceState
     'INVALID_PREPARATION_RESULT',
     `Prepare returned unsupported runtime state ${state}.`,
   );
+};
+
+const presentLocalInstance = (instance: PreparedAgentInstance): LocalAgentInstance => {
+  const bindingSummary = { local: 0, remote: 0, hybrid: 0, total: instance.bindings.length };
+  for (const binding of instance.bindings) bindingSummary[binding.mode] += 1;
+  return {
+    instanceId: instance.instanceId,
+    agent: {
+      id: instance.agentDefinition.id,
+      version: instance.agentDefinition.version,
+    },
+    build: { lockDigest: instance.build.lockDigest },
+    environment: {
+      id: instance.environmentId,
+      label: 'Local · VS Code',
+    },
+    host: instance.host,
+    preparedAt: instance.preparedAt,
+    state: instance.state,
+    bindingSummary,
+    bindings: instance.bindings.map((binding) => ({
+      capabilityId: binding.capabilityId,
+      capabilityVersion: binding.capabilityVersion,
+      profile: binding.profileId,
+      mode: binding.mode,
+      readiness: binding.readiness,
+      state: binding.state,
+    })),
+  };
 };
 
 const preparationCapability = (
@@ -473,6 +514,7 @@ const presentPreparation = (
 
 export const createBuilderService = (options: BuilderServiceOptions = {}): BuilderService => {
   const loadRegistry = options.loadRegistry ?? loadFirstPartyCapabilityRegistry;
+  const instanceStore = options.instanceStore ?? createFileSystemBuilderInstanceStore();
   const preparationEnvironment =
     options.preparationEnvironment ?? localVsCodePreparationEnvironment();
   const preparationApi = options.preparationApi ?? {
@@ -516,6 +558,18 @@ export const createBuilderService = (options: BuilderServiceOptions = {}): Build
       }
     },
 
+    async listInstances() {
+      try {
+        const discovery = await instanceStore.list();
+        return {
+          instances: discovery.instances.map((instance) => presentLocalInstance(instance)),
+          diagnostics: discovery.diagnostics,
+        };
+      } catch (error) {
+        throw asInstanceDiscoveryServiceError(error);
+      }
+    },
+
     async buildAgent(definition) {
       try {
         const { reader } = await registry();
@@ -555,6 +609,7 @@ export const createBuilderService = (options: BuilderServiceOptions = {}): Build
           hostIntegration: preparationEnvironment.hostIntegration,
         };
         const plan = preparationApi.createPreparationPlan(build, preparationOptions);
+        const existingInstance = await instanceStore.get(plan.instance.instanceId);
         const result = await preparationApi.prepareAgent(build, {
           ...preparationOptions,
           ...(preparationEnvironment.driver === undefined
@@ -563,12 +618,24 @@ export const createBuilderService = (options: BuilderServiceOptions = {}): Build
           ...(preparationEnvironment.clock === undefined
             ? {}
             : { clock: preparationEnvironment.clock }),
-          ...(preparationEnvironment.existingInstance === undefined
-            ? {}
-            : { existingInstance: preparationEnvironment.existingInstance }),
+          ...(existingInstance === undefined ? {} : { existingInstance }),
         });
-        return presentPreparation(build, plan, result);
+        const instance = parsePreparedAgentInstance(result.instance);
+        if (
+          instance.instanceId !== plan.instance.instanceId ||
+          result.identity.instanceId !== plan.instance.instanceId
+        ) {
+          throw new AgentKitError(
+            'INVALID_PREPARATION_RESULT',
+            'Prepare returned an Agent Instance for a different preparation plan.',
+          );
+        }
+        await instanceStore.put(instance);
+        return presentPreparation(build, plan, { ...result, instance });
       } catch (error) {
+        if (error instanceof BuilderInstanceStoreError) {
+          throw asInstanceStorageServiceError(error);
+        }
         throw asPreparationServiceError(error);
       }
     },

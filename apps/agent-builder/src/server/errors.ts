@@ -1,6 +1,7 @@
 import { AgentKitError, type AgentKitErrorCode } from '@agent-tool-platform/agent-kit';
 import { CapabilityRegistryValidationError } from '@agent-tool-platform/capability-registry';
 import type { BuilderErrorCode, BuilderErrorResponse } from '../shared/contracts.js';
+import { BuilderInstanceStoreError } from './instance-store.js';
 
 const MAX_ISSUES = 20;
 const MAX_ISSUE_LENGTH = 300;
@@ -99,6 +100,29 @@ export const asPreparationServiceError = (error: unknown): BuilderServiceError =
     'PREPARATION_FAILED',
     'The agent could not be prepared. Try again or inspect the local server diagnostics.',
   );
+
+export const asInstanceDiscoveryServiceError = (error: unknown): BuilderServiceError => {
+  if (error instanceof BuilderServiceError) return error;
+  return new BuilderServiceError(
+    'INSTANCE_DISCOVERY_FAILED',
+    'Local Agent Instances could not be discovered.',
+    [],
+    500,
+    { cause: error },
+  );
+};
+
+export const asInstanceStorageServiceError = (error: unknown): BuilderServiceError => {
+  if (error instanceof BuilderServiceError) return error;
+  if (!(error instanceof BuilderInstanceStoreError)) return asPreparationServiceError(error);
+  return new BuilderServiceError(
+    'INSTANCE_STORAGE_FAILED',
+    'The Prepared Agent Instance could not be reconciled with local storage.',
+    [],
+    500,
+    { cause: error },
+  );
+};
 
 export const asRegistryServiceError = (error: unknown): BuilderServiceError => {
   const converted = asBuildServiceError(error);

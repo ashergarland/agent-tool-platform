@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createInMemoryBuilderInstanceStore } from '../src/server/instance-store.js';
 import { createBuilderService } from '../src/server/service.js';
 import { LOCAL_VSCODE_ENVIRONMENT_ID } from '../src/shared/contracts.js';
 import { developerOptimizationPreset } from '../src/shared/developer-optimization-preset.js';
@@ -11,7 +12,9 @@ describe('Developer Optimization Agent Builder acceptance', () => {
         { id: 'azure', profile: 'hosted-read-only' },
       ]),
     );
-    const service = createBuilderService();
+    const service = createBuilderService({
+      instanceStore: createInMemoryBuilderInstanceStore(),
+    });
     const first = await service.buildAgent(developerOptimizationPreset);
     const second = await service.buildAgent(developerOptimizationPreset);
 
@@ -148,5 +151,15 @@ describe('Developer Optimization Agent Builder acceptance', () => {
     });
     expect(JSON.stringify(prepared)).not.toContain('actual-secret');
     expect(JSON.stringify(prepared)).not.toMatch(/[A-Za-z]:\\/u);
+
+    const discovery = await service.listInstances();
+    expect(discovery.instances).toHaveLength(1);
+    expect(discovery.instances[0]).toMatchObject({
+      instanceId: prepared.instance.instanceId,
+      state: 'NEEDS_SETUP',
+      bindingSummary: { local: 6, remote: 1, hybrid: 0, total: 7 },
+    });
+    expect(JSON.stringify(discovery)).not.toContain(developerOptimizationPreset.instructions);
+    expect(JSON.stringify(discovery)).not.toMatch(/[A-Za-z]:\\/u);
   });
 });

@@ -235,6 +235,18 @@ const handleApiRequest = async (
     sendJson(response, 200, await service.listCapabilities(), production);
     return true;
   }
+  if (requestUrl.pathname === '/api/instances' && request.method === 'GET') {
+    if (requestUrl.search.length > 0) {
+      throw new BuilderServiceError(
+        'INVALID_REQUEST',
+        'Local Agent Instance discovery does not accept query parameters.',
+        [],
+        400,
+      );
+    }
+    sendJson(response, 200, await service.listInstances(), production);
+    return true;
+  }
   if (requestUrl.pathname === '/api/build' && request.method === 'POST') {
     if (!hasAllowedOrigin(request)) {
       throw new BuilderServiceError(

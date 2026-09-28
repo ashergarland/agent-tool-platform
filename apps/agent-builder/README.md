@@ -5,9 +5,9 @@ first-party capabilities, author a host-neutral agent, and run the real Agent Ki
 without learning Registry schemas, package identities, MCP transports, or binding keys.
 
 Builder implements **Define**, **Build**, and **Prepare**, including capability execution/profile
-policy and the transient presentation of the resulting Agent Instance. It does not run an agent,
-generically install capabilities, deploy providers, durably persist or discover Agent Instances, or
-provide Agent management.
+policy and bounded local persistence/discovery of the resulting Prepared Agent Instance. It does not
+run an agent, generically install capabilities, deploy providers, collect telemetry, or provide the
+full Agent Management product.
 
 ## Architecture
 
@@ -27,8 +27,10 @@ AgentDefinition / agent.lock / readiness / VS Code outputs / Prepared Agent Inst
 
 The Registry loader and Agent Kit use Node APIs, so they remain behind a small same-origin HTTP
 boundary rather than entering the browser bundle. The backend uses the Node HTTP server directly;
-there is no full-stack framework, persistence tier, proxy, or second composition engine. Vite runs
-as development middleware, and the same Node server serves bounded production assets after build.
+there is no full-stack framework, database, mutable secondary index, proxy, or second composition
+engine. Builder owns one bounded user-local filesystem store for canonical Prepared Agent Instance
+records. Vite runs as development middleware, and the same Node server serves bounded production
+assets after build.
 Development, typecheck, test, and production build scripts first build the Platform dependencies,
 then resolve their package-root exports to `dist/index.js` and `dist/index.d.ts`. Builder
 configuration does not alias public Platform package names to package source.
@@ -36,15 +38,48 @@ configuration does not alias public Platform package names to package source.
 The API exposes only:
 
 - `GET /api/health`;
-- `GET /api/capabilities`; and
+- `GET /api/capabilities`;
+- `GET /api/instances`;
 - `POST /api/build`; and
 - `POST /api/prepare`.
 
 It has no arbitrary filesystem read/write, shell, package installation, command execution, or HTTP
 proxy operation. Requests are size-bounded, Build accepts one exact `definition` property, and
 Prepare accepts only the canonical definition, expected lock digest, and fixed local VS Code
-environment identifier. The listener binds to `127.0.0.1`. Secret and endpoint values are neither
-requested, returned, logged, nor persisted.
+environment identifier. Instance discovery accepts no path, filename, import, or state-root
+parameter. The listener binds to `127.0.0.1`. Secret and endpoint values are neither requested,
+returned, logged, nor persisted.
+
+## Local state
+
+Builder stores prepared instances beneath:
+
+```text
+<state-root>/instances/
+```
+
+The default state root is `<user-home>/.agent-tool-platform`. Set
+`AGENT_TOOL_PLATFORM_STATE_DIR` in the Builder process environment to use another root, including an
+isolated temporary root for tests or local review. This path is process-owned configuration: it is
+not accepted from the browser and is not returned through the normal API.
+
+Each instance uses one portable `<64-lowercase-hex-digest>.json` filename derived from its validated
+Agent Kit `sha256:<digest>` instance ID. Builder writes canonical
+`serializePreparedAgentInstance()` output through a same-directory temporary file, flushes it, and
+atomically replaces the instance record. Discovery enumerates only canonical-looking filenames,
+bounds file count and size, rejects unexpected file types and filename/record identity mismatches,
+and validates every record with `parsePreparedAgentInstance()`. Invalid records are isolated and
+reported through bounded counts/warnings; storage paths and raw local diagnostics are not exposed.
+
+There is no secondary index. A repeated Prepare of the same Build, host, and environment reads the
+stored instance back into Agent Kit and updates the same record. A different lock/Build or
+environment produces a different Agent Kit instance ID and may coexist. One canonical agent can
+therefore have multiple local Agent Instances.
+
+The stored document is only the canonical `PreparedAgentInstance`. It does not include canonical
+instructions, prompts, generated VS Code file content, MCP configuration content, endpoint or
+secret values, credentials, absolute workspace paths, source code, telemetry, runtime activity, or
+arbitrary UI state.
 
 ## Start
 
@@ -197,8 +232,9 @@ integration to be satisfied. Prepare does not manufacture the later runtime/tele
 ### Preparation driver boundary
 
 Builder exposes a server-side preparation-environment seam for a `ReadinessSnapshot`,
-`PreparationDriver`, host-integration evidence, clock, and optional existing instance. Production
-injects no driver because it cannot currently satisfy unresolved actions safely. Agent Kit therefore
+`PreparationDriver`, host-integration evidence, and clock. The instance store is the sole
+production reconciliation source for an existing instance. Production injects no driver because it
+cannot currently satisfy unresolved actions safely. Agent Kit therefore
 returns `setup-required` for local artifact availability, named configuration, remote connection,
 provider prerequisites, and generated host integration that lack evidence.
 
@@ -215,9 +251,15 @@ readiness, host-integration result, and unresolved setup requirements. It keeps 
 remote, and hybrid bindings unchanged and never writes environment state into `AgentDefinition` or
 `agent.yaml`.
 
-The displayed instance is transient. There is no instance database, JSON state directory, workspace
-scan, startup discovery, instance list, or history. Durable Local Agent Instance
-persistence/discovery is the next milestone. Run remains disabled and no execution is implied.
+The persisted instance is rediscovered through `GET /api/instances` when Builder starts again.
+Discovery projects only presentation-safe identity, prepared state, lock, host/environment, and
+binding readiness fields from validated records. Persistence does not change H7 readiness:
+`NEEDS_SETUP` remains not runnable, writing a file does not make an instance `READY`, and
+`preparedAt` is a preparation/reconciliation timestamp rather than `lastActiveAt`.
+
+Run remains disabled and no execution is implied. Builder does not infer `ACTIVE`, `DEGRADED`,
+runtime health, usage, success rate, or last-active time from the existence or age of an instance
+record. Full Agent Management and telemetry remain future work.
 
 ## Validation
 
@@ -233,9 +275,10 @@ The tests send Automatic, Local only, Custom, and the real Developer Optimizatio
 Builder service/API boundary, real Capability Registry, `buildVsCodeAgent()`,
 `createPreparationPlan()`, and `prepareAgent()`. They check Registry-derived profile choices,
 mutation posture, local-only incompatibility, mixed execution, deterministic outputs, lock mismatch
-rejection, conservative production readiness, synthetic `READY`, reconciliation, bounded HTTP
-handling, all three preparation states, generated files, and Azure configuration references without
-supplying a secret.
+rejection, conservative production readiness, synthetic `READY`, persisted reconciliation,
+restart discovery, atomic Windows-safe records, corruption isolation, bounded HTTP handling, all
+three preparation states, generated files, and Azure configuration references without supplying a
+secret.
 
 ## Current limitations
 
@@ -243,6 +286,7 @@ supplying a secret.
 - No files are exported or written.
 - No capability or provider is installed/deployed.
 - No endpoints or secret values are collected.
-- Prepared Agent Instances are not durably persisted or discovered.
-- No Agent Instance inventory, telemetry, or management view exists.
+- The local instance section is discovery, not the full Agent Management product.
+- No instance deletion/import lifecycle, telemetry, runtime health, activity, or history exists.
+- No external registry, fleet, database, daemon, or managed deployment is used.
 - VS Code is the only polished Builder adapter result.

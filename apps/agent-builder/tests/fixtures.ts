@@ -2,6 +2,7 @@ import type {
   BuildAgentResult,
   CapabilityCatalogItem,
   CapabilityCatalogResponse,
+  LocalAgentInstanceDiscoveryResponse,
   PreparationActionPresentation,
   PrepareAgentResult,
 } from '../src/shared/contracts.js';
@@ -404,6 +405,64 @@ export const prepareResultFixture = (
     setupRequirements,
   };
 };
+
+export const emptyInstanceDiscoveryFixture: LocalAgentInstanceDiscoveryResponse = {
+  instances: [],
+  diagnostics: {
+    inspectedRecordCount: 0,
+    invalidRecordCount: 0,
+    truncated: false,
+    warnings: [],
+  },
+};
+
+export const instanceDiscoveryFixture = (
+  state: PrepareAgentResult['instance']['state'] = 'NEEDS_SETUP',
+): LocalAgentInstanceDiscoveryResponse => ({
+  instances: [
+    {
+      instanceId: preparationDigest('9'),
+      agent: {
+        id: buildResultFixture.agent.id,
+        version: buildResultFixture.agent.version,
+      },
+      build: { lockDigest: buildResultFixture.lockDigest },
+      environment: {
+        id: LOCAL_VSCODE_ENVIRONMENT_ID,
+        label: 'Local · VS Code',
+      },
+      host: {
+        id: 'vscode',
+        adapterSchemaVersion: 2,
+      },
+      preparedAt: '2026-09-27T12:00:00.000Z',
+      state,
+      bindingSummary: {
+        ...buildResultFixture.execution,
+        total: buildResultFixture.capabilities.length,
+      },
+      bindings: buildResultFixture.capabilities.map((capability) => ({
+        capabilityId: capability.id,
+        capabilityVersion: capability.resolvedVersion,
+        profile: capability.profile.id,
+        mode: capability.binding.mode,
+        readiness:
+          state === 'READY'
+            ? capability.binding.mode === 'local'
+              ? 'available-local'
+              : 'ready'
+            : capability.readiness.state,
+        state,
+      })),
+    },
+  ],
+  diagnostics: {
+    inspectedRecordCount: 1,
+    invalidRecordCount: 0,
+    truncated: false,
+    warnings: [],
+  },
+});
 
 export const jsonResponse = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), {

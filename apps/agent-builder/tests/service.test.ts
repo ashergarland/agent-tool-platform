@@ -6,13 +6,19 @@ import {
   type AgentBuild,
   type PreparationDriver,
   type PreparationDriverRequest,
-  type PreparedAgentInstance,
   type ReadinessSnapshot,
   type VsCodeAdapterOutput,
 } from '@agent-tool-platform/agent-kit';
 import { describe, expect, it, vi } from 'vitest';
 import { asPreparationServiceError, BuilderServiceError } from '../src/server/errors.js';
-import { createBuilderService } from '../src/server/service.js';
+import {
+  BuilderInstanceStoreError,
+  createInMemoryBuilderInstanceStore,
+} from '../src/server/instance-store.js';
+import {
+  createBuilderService as createProductionBuilderService,
+  type BuilderServiceOptions,
+} from '../src/server/service.js';
 import { LOCAL_VSCODE_ENVIRONMENT_ID } from '../src/shared/contracts.js';
 import { developerOptimizationPreset } from '../src/shared/developer-optimization-preset.js';
 
@@ -43,6 +49,12 @@ const readySnapshotFor = (build: AgentBuild<VsCodeAdapterOutput>): ReadinessSnap
       availableNames: [...binding.requiredSecretNames],
     })),
 });
+
+const createBuilderService = (options: BuilderServiceOptions = {}) =>
+  createProductionBuilderService({
+    instanceStore: createInMemoryBuilderInstanceStore(),
+    ...options,
+  });
 
 describe('Agent Builder service', () => {
   it('presents the real first-party Registry without owning duplicate records', async () => {
@@ -232,6 +244,10 @@ describe('Agent Builder service', () => {
     expect(first.instance.instanceId).toBe(second.instance.instanceId);
     expect(first.instance.instanceId).toBe(first.plan.instanceId);
     expect(first.preparation.disposition).toBe('created');
+    expect(second.preparation.disposition).toBe('updated');
+    expect(runPreparation.mock.calls[1]?.[1]).toMatchObject({
+      existingInstance: { instanceId: first.instance.instanceId },
+    });
     expect(first.plan.actions.map(({ kind }) => kind)).toEqual([
       'make-local-artifact-available',
       'make-local-artifact-available',
@@ -359,54 +375,89 @@ describe('Agent Builder service', () => {
     expect(conservative.preparation.runnable).toBe(false);
   });
 
-  it('passes an injected existing instance to H7 for deterministic update reconciliation', async () => {
-    let capturedInstance: PreparedAgentInstance | undefined;
-    const capturePreparation = vi.fn(
+  it('loads the persisted instance into H7 for deterministic update reconciliation', async () => {
+    const instanceStore = createInMemoryBuilderInstanceStore();
+    let capturedExistingInstance: unknown;
+    const captureExistingInstance = vi.fn(
       async (...parameters: Parameters<typeof prepareAgentWithAgentKit>) => {
-        const result = await prepareAgentWithAgentKit(...parameters);
-        capturedInstance = result.instance;
-        return result;
+        capturedExistingInstance = parameters[1].existingInstance;
+        return prepareAgentWithAgentKit(...parameters);
       },
     );
     const firstService = createBuilderService({
+      instanceStore,
       preparationEnvironment: {
         environmentId: 'reconciliation-vscode',
         readinessSnapshot: readySnapshotFor,
         hostIntegration: 'available',
         clock: { now: () => new Date('2026-09-27T12:00:00.000Z') },
       },
-      preparationApi: {
-        createPreparationPlan,
-        prepareAgent: capturePreparation,
-      },
     });
     const build = await firstService.buildAgent(developerOptimizationPreset);
     const first = await firstService.prepareAgent(
       prepareRequest(build.lockDigest, 'reconciliation-vscode'),
     );
-    expect(capturedInstance).toBeDefined();
 
     const secondService = createBuilderService({
+      instanceStore,
       preparationEnvironment: {
         environmentId: 'reconciliation-vscode',
         readinessSnapshot: readySnapshotFor,
         hostIntegration: 'available',
-        existingInstance: capturedInstance,
         clock: { now: () => new Date('2026-09-27T13:00:00.000Z') },
+      },
+      preparationApi: {
+        createPreparationPlan,
+        prepareAgent: captureExistingInstance,
       },
     });
     const second = await secondService.prepareAgent(
       prepareRequest(build.lockDigest, 'reconciliation-vscode'),
     );
 
+    expect(capturedExistingInstance).toMatchObject({
+      instanceId: first.instance.instanceId,
+      preparedAt: '2026-09-27T12:00:00.000Z',
+    });
     expect(first.preparation.disposition).toBe('created');
     expect(second.preparation.disposition).toBe('updated');
     expect(second.instance.instanceId).toBe(first.instance.instanceId);
     expect(second.instance.preparedAt).toBe('2026-09-27T13:00:00.000Z');
+    await expect(instanceStore.list()).resolves.toMatchObject({
+      instances: [{ instanceId: first.instance.instanceId }],
+      diagnostics: { invalidRecordCount: 0 },
+    });
+  });
+
+  it('keeps changed canonical Builds as distinct local Agent Instances', async () => {
+    const instanceStore = createInMemoryBuilderInstanceStore();
+    const service = createBuilderService({ instanceStore });
+    const firstBuild = await service.buildAgent(developerOptimizationPreset);
+    const first = await service.prepareAgent(prepareRequest(firstBuild.lockDigest));
+    const changedDefinition = {
+      ...developerOptimizationPreset,
+      instructions: `${developerOptimizationPreset.instructions}\nPreserve changed-build evidence.`,
+    };
+    const secondBuild = await service.buildAgent(changedDefinition);
+    const second = await service.prepareAgent({
+      definition: changedDefinition,
+      expectedLockDigest: secondBuild.lockDigest,
+      environmentId: LOCAL_VSCODE_ENVIRONMENT_ID,
+    });
+
+    expect(secondBuild.lockDigest).not.toBe(firstBuild.lockDigest);
+    expect(second.instance.instanceId).not.toBe(first.instance.instanceId);
+    const discovery = await service.listInstances();
+    expect(discovery.instances.map(({ instanceId }) => instanceId)).toEqual(
+      expect.arrayContaining([first.instance.instanceId, second.instance.instanceId]),
+    );
+    expect(discovery.instances).toHaveLength(2);
   });
 
   it('derives distinct instance identity from a different injected environment', async () => {
+    const instanceStore = createInMemoryBuilderInstanceStore();
     const firstService = createBuilderService({
+      instanceStore,
       preparationEnvironment: {
         environmentId: 'environment-a',
         readinessSnapshot: readySnapshotFor,
@@ -414,6 +465,7 @@ describe('Agent Builder service', () => {
       },
     });
     const secondService = createBuilderService({
+      instanceStore,
       preparationEnvironment: {
         environmentId: 'environment-b',
         readinessSnapshot: readySnapshotFor,
@@ -429,6 +481,47 @@ describe('Agent Builder service', () => {
     );
 
     expect(second.instance.instanceId).not.toBe(first.instance.instanceId);
+    await expect(instanceStore.list()).resolves.toMatchObject({
+      instances: expect.arrayContaining([
+        expect.objectContaining({ instanceId: first.instance.instanceId }),
+        expect.objectContaining({ instanceId: second.instance.instanceId }),
+      ]),
+    });
+  });
+
+  it('returns a bounded failure when a successful preparation cannot be persisted', async () => {
+    const privatePath = 'C:\\Users\\private\\instances\\record.json';
+    const service = createBuilderService({
+      instanceStore: {
+        async get() {
+          return undefined;
+        },
+        async put() {
+          throw new BuilderInstanceStoreError('write', 'fixture persistence failure', {
+            cause: new Error(privatePath),
+          });
+        },
+        async list() {
+          return {
+            instances: [],
+            diagnostics: {
+              inspectedRecordCount: 0,
+              invalidRecordCount: 0,
+              truncated: false,
+              warnings: [],
+            },
+          };
+        },
+      },
+    });
+    const build = await service.buildAgent(developerOptimizationPreset);
+
+    await expect(service.prepareAgent(prepareRequest(build.lockDigest))).rejects.toMatchObject({
+      code: 'INSTANCE_STORAGE_FAILED',
+      status: 500,
+      issues: [],
+      message: 'The Prepared Agent Instance could not be reconciled with local storage.',
+    });
   });
 
   it.each([

@@ -57,7 +57,7 @@ describe('Builder public package boundary', () => {
     expect(declaration).toBe(expectedDeclaration);
   });
 
-  it('keeps preparation behind public APIs without installer, write, proxy, or persistence code', () => {
+  it('keeps preparation and persistence behind public APIs without installer or proxy code', () => {
     const productionSources = parsedConfig.fileNames
       .filter((path) => path.includes(`${resolve(appRoot, 'src')}`))
       .map((path) => ts.sys.readFile(path) ?? '')
@@ -66,11 +66,23 @@ describe('Builder public package boundary', () => {
       .filter((path) => path.includes(`${resolve(appRoot, 'src', 'server')}`))
       .map((path) => ts.sys.readFile(path) ?? '')
       .join('\n');
+    const nonStoreServerSources = parsedConfig.fileNames
+      .filter(
+        (path) =>
+          path.includes(`${resolve(appRoot, 'src', 'server')}`) &&
+          !path.endsWith('instance-store.ts'),
+      )
+      .map((path) => ts.sys.readFile(path) ?? '')
+      .join('\n');
+    const instanceStoreSource =
+      ts.sys.readFile(resolve(appRoot, 'src', 'server', 'instance-store.ts')) ?? '';
 
     expect(productionSources).not.toMatch(/packages[\\/]agent-kit[\\/]src/u);
     expect(serverSources).not.toMatch(/node:child_process|node:sqlite|npm\s+(?:install|link)/u);
-    expect(serverSources).not.toMatch(/\b(?:appendFile|mkdir|writeFile)\b/u);
+    expect(nonStoreServerSources).not.toMatch(/\b(?:appendFile|mkdir|writeFile)\b/u);
     expect(serverSources).not.toMatch(/\bfetch\s*\(/u);
     expect(serverSources).not.toContain('/api/proxy');
+    expect(instanceStoreSource).toContain('serializePreparedAgentInstance');
+    expect(instanceStoreSource).toContain('parsePreparedAgentInstance');
   });
 });

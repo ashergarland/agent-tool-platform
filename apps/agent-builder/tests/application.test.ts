@@ -8,7 +8,13 @@ import {
 import { BuilderServiceError } from '../src/server/errors.js';
 import type { BuilderService } from '../src/server/service.js';
 import { LOCAL_VSCODE_ENVIRONMENT_ID } from '../src/shared/contracts.js';
-import { buildResultFixture, catalogFixture, prepareResultFixture } from './fixtures.js';
+import {
+  buildResultFixture,
+  catalogFixture,
+  emptyInstanceDiscoveryFixture,
+  instanceDiscoveryFixture,
+  prepareResultFixture,
+} from './fixtures.js';
 
 const applications: BuilderApplication[] = [];
 
@@ -33,12 +39,13 @@ const start = async (service?: BuilderService) => {
 
 const serviceFixture = (): BuilderService => ({
   listCapabilities: vi.fn(async () => catalogFixture),
+  listInstances: vi.fn(async () => instanceDiscoveryFixture()),
   buildAgent: vi.fn(async () => buildResultFixture),
   prepareAgent: vi.fn(async () => prepareResultFixture()),
 });
 
 describe('Agent Builder loopback API', () => {
-  it('exposes only bounded health, catalog, build, and prepare operations', async () => {
+  it('exposes only bounded health, catalog, instance discovery, build, and prepare operations', async () => {
     const service = serviceFixture();
     const { origin } = await start(service);
     const definition = {
@@ -52,6 +59,7 @@ describe('Agent Builder loopback API', () => {
 
     const health = await fetch(`${origin}/api/health`);
     const catalog = await fetch(`${origin}/api/capabilities`);
+    const instances = await fetch(`${origin}/api/instances`);
     const build = await fetch(`${origin}/api/build`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -71,6 +79,8 @@ describe('Agent Builder loopback API', () => {
     await expect(health.json()).resolves.toEqual({ status: 'ok', service: 'agent-builder' });
     expect(catalog.status).toBe(200);
     await expect(catalog.json()).resolves.toEqual(catalogFixture);
+    expect(instances.status).toBe(200);
+    await expect(instances.json()).resolves.toEqual(instanceDiscoveryFixture());
     expect(build.status).toBe(200);
     await expect(build.json()).resolves.toEqual(buildResultFixture);
     expect(prepare.status).toBe(200);
@@ -85,6 +95,21 @@ describe('Agent Builder loopback API', () => {
       const response = await fetch(`${origin}${path}`, { method: 'POST' });
       expect(response.status, path).toBe(404);
     }
+  });
+
+  it('accepts no filesystem or state-root parameters for local instance discovery', async () => {
+    const service = serviceFixture();
+    const { origin } = await start(service);
+
+    const response = await fetch(
+      `${origin}/api/instances?path=${encodeURIComponent('C:\\Users\\private')}`,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'INVALID_REQUEST' },
+    });
+    expect(service.listInstances).not.toHaveBeenCalled();
   });
 
   it('validates the exact bounded Prepare request without accepting paths or commands', async () => {
@@ -219,6 +244,7 @@ describe('Agent Builder loopback API', () => {
           503,
         );
       }),
+      listInstances: vi.fn(async () => emptyInstanceDiscoveryFixture),
       buildAgent: vi.fn(async () => buildResultFixture),
       prepareAgent: vi.fn(async () => prepareResultFixture()),
     };
