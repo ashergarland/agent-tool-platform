@@ -303,7 +303,8 @@ secret.
 ## Current limitations
 
 - Run is not implemented.
-- No files are exported or written.
+- No generated agent, MCP, or host files are exported or materialized into a consumer workspace;
+  Builder only persists local `PreparedAgentInstance` state.
 - No capability or provider is installed/deployed.
 - No endpoints or secret values are collected.
 - The local instance section is discovery, not the full Agent Management product.

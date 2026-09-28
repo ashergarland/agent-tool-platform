@@ -79,7 +79,7 @@ interface FileIdentity {
 
 /** @internal Deterministic identity assertion shared by the open algorithm and race tests. */
 export const assertSameFileIdentity = (opened: FileIdentity, addressed: FileIdentity): void => {
-  if (opened.ino === 0n || addressed.ino === 0n) {
+  if (opened.dev === 0n || opened.ino === 0n || addressed.dev === 0n || addressed.ino === 0n) {
     throw forbidden('File identity cannot be verified on this platform or filesystem');
   }
   if (opened.dev !== addressed.dev || opened.ino !== addressed.ino) {
