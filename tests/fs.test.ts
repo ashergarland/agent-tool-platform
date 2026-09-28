@@ -318,15 +318,30 @@ describe('RootBoundary', () => {
   });
 
   describe('opened file identity', () => {
-    it('accepts matching identities and fails closed for changes or unsupported metadata', () => {
+    it('accepts matching non-zero device and inode identities', () => {
       expect(() =>
         assertSameFileIdentity({ dev: 1n, ino: 2n }, { dev: 1n, ino: 2n }),
       ).not.toThrow();
-      expect(() => assertSameFileIdentity({ dev: 1n, ino: 2n }, { dev: 1n, ino: 3n })).toThrow(
-        /changed/u,
+    });
+
+    it.each([
+      ['inode', { dev: 1n, ino: 2n }, { dev: 1n, ino: 3n }],
+      ['device', { dev: 1n, ino: 2n }, { dev: 2n, ino: 2n }],
+    ])('rejects a mismatched %s as a changed path', (_component, opened, addressed) => {
+      expect(() => assertSameFileIdentity(opened, addressed)).toThrow(
+        'The addressed path changed while the file was being opened',
       );
-      expect(() => assertSameFileIdentity({ dev: 1n, ino: 0n }, { dev: 1n, ino: 0n })).toThrow(
-        /cannot be verified/u,
+    });
+
+    it.each([
+      ['opened inode', { dev: 1n, ino: 0n }, { dev: 1n, ino: 2n }],
+      ['addressed inode', { dev: 1n, ino: 2n }, { dev: 1n, ino: 0n }],
+      ['opened device', { dev: 0n, ino: 2n }, { dev: 1n, ino: 2n }],
+      ['addressed device', { dev: 1n, ino: 2n }, { dev: 0n, ino: 2n }],
+      ['device on both sides', { dev: 0n, ino: 2n }, { dev: 0n, ino: 2n }],
+    ])('rejects a zero %s as unverifiable', (_component, opened, addressed) => {
+      expect(() => assertSameFileIdentity(opened, addressed)).toThrow(
+        'File identity cannot be verified on this platform or filesystem',
       );
     });
   });

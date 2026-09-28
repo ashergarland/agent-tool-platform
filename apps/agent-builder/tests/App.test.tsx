@@ -9,6 +9,8 @@ import { LOCAL_VSCODE_ENVIRONMENT_ID } from '../src/shared/contracts.js';
 import {
   buildResultFixture,
   catalogFixture,
+  emptyInstanceDiscoveryFixture,
+  instanceDiscoveryFixture,
   jsonResponse,
   prepareResultFixture,
 } from './fixtures.js';
@@ -56,8 +58,82 @@ describe('Agent Builder UI', () => {
     expect(deriveAgentId('  Release & Evidence Agent  ')).toBe('release-evidence');
   });
 
+  it.each(['READY', 'NEEDS_SETUP', 'UNAVAILABLE'] as const)(
+    'renders a discovered %s local instance without invented telemetry',
+    async (state) => {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+        const url = requestUrl(input);
+        if (url.endsWith('/api/instances')) return jsonResponse(instanceDiscoveryFixture(state));
+        if (url.endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
+        throw new Error(`Unexpected request: ${url}`);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      render(<App />);
+
+      const heading = await screen.findByRole('heading', { name: 'Local Agent Instances' });
+      const section = heading.closest('section');
+      if (section === null) throw new Error('Expected the Local Agent Instances section.');
+      const instances = within(section);
+      expect(instances.getByRole('heading', { name: 'Developer Optimization Agent' })).toBeTruthy();
+      expect(instances.getByText(state === 'NEEDS_SETUP' ? 'NEEDS SETUP' : state)).toBeTruthy();
+      expect(instances.getByText('Local · VS Code')).toBeTruthy();
+      const summary = section.querySelector('.local-instance-summary');
+      expect(summary?.textContent).toMatch(/6\s*Local/u);
+      expect(summary?.textContent).toMatch(/1\s*Remote/u);
+      expect(summary?.textContent).toMatch(/0\s*Hybrid/u);
+      expect(summary?.textContent).toMatch(/7\s*bindings/u);
+      expect(section.textContent).not.toMatch(/last active|success rate|\bruns?\b|telemetry/iu);
+    },
+  );
+
+  it('refreshes local discovery after Prepare succeeds', async () => {
+    let discoveryRequests = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = requestUrl(input);
+        if (url.endsWith('/api/instances')) {
+          discoveryRequests += 1;
+          return jsonResponse(
+            discoveryRequests === 1
+              ? emptyInstanceDiscoveryFixture
+              : instanceDiscoveryFixture('NEEDS_SETUP'),
+          );
+        }
+        if (url.endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
+        if (url.endsWith('/api/build') && init?.method === 'POST') {
+          return jsonResponse(buildResultFixture);
+        }
+        if (url.endsWith('/api/prepare') && init?.method === 'POST') {
+          return jsonResponse(prepareResultFixture('NEEDS_SETUP'));
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByText('No prepared instances yet')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /Developer Optimization preset/i }));
+    await user.click(screen.getByRole('button', { name: 'Build agent' }));
+    await screen.findByText('Build complete');
+    await user.click(screen.getByRole('button', { name: 'Prepare agent' }));
+
+    const section = screen
+      .getByRole('heading', { name: 'Local Agent Instances' })
+      .closest('section');
+    if (section === null) throw new Error('Expected the Local Agent Instances section.');
+    expect(
+      await within(section).findByRole('heading', { name: 'Developer Optimization Agent' }),
+    ).toBeTruthy();
+    expect(discoveryRequests).toBe(2);
+  });
+
   it('renders the real catalog surface and supports preset selection changes', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      if (requestUrl(input).endsWith('/api/instances')) {
+        return jsonResponse(emptyInstanceDiscoveryFixture);
+      }
       if (requestUrl(input).endsWith('/api/capabilities')) {
         return jsonResponse(catalogFixture);
       }
@@ -105,6 +181,7 @@ describe('Agent Builder UI', () => {
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const url = requestUrl(input);
+        if (url.endsWith('/api/instances')) return jsonResponse(emptyInstanceDiscoveryFixture);
         if (url.endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
         if (url.endsWith('/api/build') && init?.method === 'POST') {
           return jsonResponse(buildResultFixture);
@@ -133,6 +210,7 @@ describe('Agent Builder UI', () => {
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const url = requestUrl(input);
+        if (url.endsWith('/api/instances')) return jsonResponse(emptyInstanceDiscoveryFixture);
         if (url.endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
         if (url.endsWith('/api/build') && init?.method === 'POST') {
           return jsonResponse(buildResultFixture);
@@ -166,6 +244,9 @@ describe('Agent Builder UI', () => {
 
   it('blocks Local only when Azure has no local-compatible Registry profile', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      if (requestUrl(input).endsWith('/api/instances')) {
+        return jsonResponse(emptyInstanceDiscoveryFixture);
+      }
       if (requestUrl(input).endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
       throw new Error(`Unexpected request: ${requestUrl(input)}`);
     });
@@ -192,6 +273,7 @@ describe('Agent Builder UI', () => {
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const url = requestUrl(input);
+        if (url.endsWith('/api/instances')) return jsonResponse(emptyInstanceDiscoveryFixture);
         if (url.endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
         if (url.endsWith('/api/build') && init?.method === 'POST') {
           return jsonResponse(buildResultFixture);
@@ -240,6 +322,7 @@ describe('Agent Builder UI', () => {
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const url = requestUrl(input);
+        if (url.endsWith('/api/instances')) return jsonResponse(emptyInstanceDiscoveryFixture);
         if (url.endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
         if (url.endsWith('/api/build') && init?.method === 'POST') return pendingBuild;
         throw new Error(`Unexpected request: ${url}`);
@@ -288,6 +371,9 @@ describe('Agent Builder UI', () => {
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const url = requestUrl(input);
+        if (url.endsWith('/api/instances')) {
+          return jsonResponse(emptyInstanceDiscoveryFixture);
+        }
         if (url.endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
         if (url.endsWith('/api/build') && init?.method === 'POST') {
           return jsonResponse(buildResultFixture);
@@ -344,6 +430,9 @@ describe('Agent Builder UI', () => {
       const fetchMock = vi.fn(
         async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
           const url = requestUrl(input);
+          if (url.endsWith('/api/instances')) {
+            return jsonResponse(emptyInstanceDiscoveryFixture);
+          }
           if (url.endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
           if (url.endsWith('/api/build') && init?.method === 'POST') {
             return jsonResponse(buildResultFixture);
@@ -380,6 +469,7 @@ describe('Agent Builder UI', () => {
   it('preserves structured Agent Kit build errors without stack traces', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
       const url = requestUrl(input);
+      if (url.endsWith('/api/instances')) return jsonResponse(emptyInstanceDiscoveryFixture);
       if (url.endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
       if (url.endsWith('/api/build')) {
         return jsonResponse(
@@ -415,6 +505,7 @@ describe('Agent Builder UI', () => {
   it('presents a structured HTTP 500 as a Builder request failure', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
       const url = requestUrl(input);
+      if (url.endsWith('/api/instances')) return jsonResponse(emptyInstanceDiscoveryFixture);
       if (url.endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
       if (url.endsWith('/api/build')) {
         return jsonResponse(
@@ -447,6 +538,7 @@ describe('Agent Builder UI', () => {
   it('reports a network rejection as an unavailable local Builder server', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
       const url = requestUrl(input);
+      if (url.endsWith('/api/instances')) return jsonResponse(emptyInstanceDiscoveryFixture);
       if (url.endsWith('/api/capabilities')) return jsonResponse(catalogFixture);
       if (url.endsWith('/api/build')) throw new TypeError('fetch failed');
       throw new Error(`Unexpected request: ${url}`);

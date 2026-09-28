@@ -28,6 +28,7 @@
   "dependencies": {
     "@agent-tool-platform/agent-kit": "0.0.0-development",
     "@agent-tool-platform/capability-registry": "0.0.0-development",
+    "@agent-tool-platform/runtime": "0.0.0-development",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

@@ -232,9 +232,55 @@ export interface PrepareAgentResult {
   })[];
 }
 
+export interface LocalAgentInstanceBinding {
+  readonly capabilityId: string;
+  readonly capabilityVersion: string;
+  readonly profile: string;
+  readonly mode: BindingMode;
+  readonly readiness: ReadinessState;
+  readonly state: AgentInstanceState;
+}
+
+export interface LocalAgentInstance {
+  readonly instanceId: string;
+  readonly agent: {
+    readonly id: string;
+    readonly version: string;
+  };
+  readonly build: {
+    readonly lockDigest: string;
+  };
+  readonly environment: {
+    readonly id: string;
+    readonly label: 'Local · VS Code';
+  };
+  readonly host: {
+    readonly id: string;
+    readonly adapterSchemaVersion: number;
+  };
+  readonly preparedAt: string;
+  readonly state: AgentInstanceState;
+  readonly bindingSummary: Readonly<Record<BindingMode, number>> & {
+    readonly total: number;
+  };
+  readonly bindings: readonly LocalAgentInstanceBinding[];
+}
+
+export interface LocalAgentInstanceDiscoveryResponse {
+  readonly instances: readonly LocalAgentInstance[];
+  readonly diagnostics: {
+    readonly inspectedRecordCount: number;
+    readonly invalidRecordCount: number;
+    readonly truncated: boolean;
+    readonly warnings: readonly string[];
+  };
+}
+
 export type BuilderErrorCode =
   | 'BUILD_FAILED'
   | 'BUILD_LOCK_MISMATCH'
+  | 'INSTANCE_DISCOVERY_FAILED'
+  | 'INSTANCE_STORAGE_FAILED'
   | 'INVALID_REQUEST'
   | 'PAYLOAD_TOO_LARGE'
   | 'REGISTRY_UNAVAILABLE'

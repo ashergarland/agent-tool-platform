@@ -92,6 +92,9 @@ jobs:
       - name: Test Windows RootBoundary and scratch lifecycle
         run: npx vitest run tests/fs.test.ts tests/scratch.test.ts
 
+      - name: Test Windows Builder instance confinement
+        run: npm run test --workspace @agent-tool-platform/agent-builder -- tests/instance-store.test.ts
+
       - name: Test Windows filesystem conformance
         run: npx vitest run tests/conformance.test.ts -t "root boundary conformance|scratch workspace conformance"
 

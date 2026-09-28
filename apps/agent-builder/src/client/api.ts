@@ -5,6 +5,7 @@ import type {
   BuilderErrorCode,
   BuilderErrorResponse,
   CapabilityCatalogResponse,
+  LocalAgentInstanceDiscoveryResponse,
   PrepareAgentRequest,
   PrepareAgentResult,
 } from '../shared/contracts.js';
@@ -89,6 +90,17 @@ export const getCapabilityCatalog = async (
       headers: { Accept: 'application/json' },
       ...(signal === undefined ? {} : { signal }),
     }),
+  );
+
+export const getLocalAgentInstances = async (
+  signal?: AbortSignal,
+): Promise<LocalAgentInstanceDiscoveryResponse> =>
+  responseJson<LocalAgentInstanceDiscoveryResponse>(
+    await fetchBuilder('/api/instances', {
+      headers: { Accept: 'application/json' },
+      ...(signal === undefined ? {} : { signal }),
+    }),
+    'INSTANCE_DISCOVERY_FAILED',
   );
 
 export const buildAgent = async (

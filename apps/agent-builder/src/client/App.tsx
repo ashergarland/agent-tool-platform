@@ -5,6 +5,7 @@ import {
   BuilderApiError,
   BuilderUnavailableError,
   getCapabilityCatalog,
+  getLocalAgentInstances,
   prepareAgent,
 } from './api.js';
 import type {
@@ -14,6 +15,8 @@ import type {
   CapabilityCatalogProfile,
   CapabilityCatalogResponse,
   GeneratedArtifact,
+  LocalAgentInstance,
+  LocalAgentInstanceDiscoveryResponse,
   PrepareActionResultPresentation,
   PrepareAgentResult,
   PreparedInstanceState,
@@ -74,6 +77,16 @@ const instanceStatePresentation: Readonly<
   Record<PreparedInstanceState, { readonly label: string; readonly tone: string }>
 > = {
   READY: { label: 'READY', tone: 'positive' },
+  NEEDS_SETUP: { label: 'NEEDS SETUP', tone: 'warning' },
+  UNAVAILABLE: { label: 'UNAVAILABLE', tone: 'danger' },
+};
+
+const discoveredStatePresentation: Readonly<
+  Record<LocalAgentInstance['state'], { readonly label: string; readonly tone: string }>
+> = {
+  READY: { label: 'READY', tone: 'positive' },
+  ACTIVE: { label: 'ACTIVE', tone: 'positive' },
+  DEGRADED: { label: 'DEGRADED', tone: 'warning' },
   NEEDS_SETUP: { label: 'NEEDS SETUP', tone: 'warning' },
   UNAVAILABLE: { label: 'UNAVAILABLE', tone: 'danger' },
 };
@@ -583,6 +596,134 @@ const CatalogPage = ({
       </section>
     ) : null}
   </div>
+);
+
+const localInstanceName = (agentId: string): string => {
+  const name = agentId
+    .split('-')
+    .filter(Boolean)
+    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
+    .join(' ');
+  return name.endsWith(' Agent') ? name : `${name} Agent`;
+};
+
+const preparedTime = (value: string): string =>
+  new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
+
+const LocalInstancesSection = ({
+  discovery,
+  error,
+  onRetry,
+  state,
+}: {
+  readonly discovery: LocalAgentInstanceDiscoveryResponse | undefined;
+  readonly error: UiError | undefined;
+  readonly onRetry: () => void;
+  readonly state: LoadState;
+}): ReactNode => (
+  <section aria-labelledby="local-instances-heading" className="local-instances">
+    <div className="local-instances-heading">
+      <div>
+        <span className="eyebrow">Persisted locally</span>
+        <h2 id="local-instances-heading">Local Agent Instances</h2>
+      </div>
+      <p>
+        Prepared instances are validated through Agent Kit and rediscovered when Builder restarts.
+        Persistence does not mean the agent is running.
+      </p>
+    </div>
+    {state === 'loading' ? (
+      <div aria-label="Loading local Agent Instances" className="instance-loading">
+        <span className="spinner" />
+        Discovering prepared instances…
+      </div>
+    ) : null}
+    {state === 'error' && error !== undefined ? (
+      <ErrorNotice error={error} onRetry={onRetry} title="Local instances unavailable" />
+    ) : null}
+    {state === 'ready' && discovery?.instances.length === 0 ? (
+      <div className="instance-empty">
+        <Icon name="layers" size={20} />
+        <div>
+          <strong>No prepared instances yet</strong>
+          <span>Build and Prepare an agent to persist its local Agent Instance.</span>
+        </div>
+      </div>
+    ) : null}
+    {state === 'ready' && discovery !== undefined && discovery.instances.length > 0 ? (
+      <div className="local-instance-grid">
+        {discovery.instances.map((instance) => {
+          const presentation = discoveredStatePresentation[instance.state];
+          return (
+            <article className="local-instance-card" key={instance.instanceId}>
+              <div className="local-instance-card-heading">
+                <div>
+                  <h3>{localInstanceName(instance.agent.id)}</h3>
+                  <code>
+                    {instance.agent.id} · v{instance.agent.version}
+                  </code>
+                </div>
+                <span className={`status-chip ${presentation.tone}`}>{presentation.label}</span>
+              </div>
+              <div className="local-instance-context">
+                <strong>{instance.environment.label}</strong>
+                <span>
+                  Prepared{' '}
+                  <time dateTime={instance.preparedAt}>{preparedTime(instance.preparedAt)}</time>
+                </span>
+              </div>
+              <div className="local-instance-summary">
+                <span>
+                  <strong>{String(instance.bindingSummary.local)}</strong> Local
+                </span>
+                <span>
+                  <strong>{String(instance.bindingSummary.remote)}</strong> Remote
+                </span>
+                <span>
+                  <strong>{String(instance.bindingSummary.hybrid)}</strong> Hybrid
+                </span>
+                <span>{String(instance.bindingSummary.total)} bindings</span>
+              </div>
+              <details className="local-instance-details">
+                <summary>Binding readiness</summary>
+                <div>
+                  {instance.bindings.map((binding) => (
+                    <div
+                      className="local-instance-binding"
+                      key={`${binding.capabilityId}-${binding.capabilityVersion}-${binding.profile}`}
+                    >
+                      <span>
+                        <strong>{binding.capabilityId}</strong>
+                        <code>
+                          v{binding.capabilityVersion} · {binding.profile}
+                        </code>
+                      </span>
+                      <span>
+                        {modePresentation[binding.mode].label} ·{' '}
+                        {discoveredStatePresentation[binding.state].label}
+                      </span>
+                      <small>{readinessPresentation[binding.readiness].label}</small>
+                    </div>
+                  ))}
+                </div>
+              </details>
+              <code className="local-instance-id">{instance.instanceId}</code>
+            </article>
+          );
+        })}
+      </div>
+    ) : null}
+    {state === 'ready' && discovery !== undefined && discovery.diagnostics.warnings.length > 0 ? (
+      <div className="instance-discovery-warning" role="status">
+        {discovery.diagnostics.warnings.map((warning) => (
+          <span key={warning}>{warning}</span>
+        ))}
+      </div>
+    ) : null}
+  </section>
 );
 
 const Lifecycle = ({
@@ -1342,8 +1483,8 @@ const AgentInstanceView = ({ result }: { readonly result: PrepareAgentResult }):
             <span className="eyebrow">Run remains future work</span>
             <h2>No execution has occurred.</h2>
             <p>
-              This transient Agent Instance is displayed from the current Prepare response. It is
-              not durably persisted or discovered after the Builder session.
+              This Prepared Agent Instance is persisted in Builder&apos;s bounded local state and
+              can be rediscovered after restart. Persistence does not make it active or runnable.
             </p>
           </div>
         </div>
@@ -1507,6 +1648,10 @@ const BuilderPage = ({
   prepareError,
   prepareResult,
   preparing,
+  instanceDiscovery,
+  instanceError,
+  instanceState,
+  onRetryInstances,
 }: {
   readonly catalog: CapabilityCatalogResponse | undefined;
   readonly catalogState: LoadState;
@@ -1525,6 +1670,10 @@ const BuilderPage = ({
   readonly prepareError: UiError | undefined;
   readonly prepareResult: PrepareAgentResult | undefined;
   readonly preparing: boolean;
+  readonly instanceDiscovery: LocalAgentInstanceDiscoveryResponse | undefined;
+  readonly instanceError: UiError | undefined;
+  readonly instanceState: LoadState;
+  readonly onRetryInstances: () => void;
 }): ReactNode => (
   <div className="page builder-page">
     <section className="builder-heading">
@@ -1541,6 +1690,12 @@ const BuilderPage = ({
         preparing={preparing}
       />
     </section>
+    <LocalInstancesSection
+      discovery={instanceDiscovery}
+      error={instanceError}
+      onRetry={onRetryInstances}
+      state={instanceState}
+    />
     {buildResult === undefined ? (
       <div className="authoring-layout">
         <AuthoringForm
@@ -1576,6 +1731,9 @@ export const App = (): ReactNode => {
   const [catalogState, setCatalogState] = useState<LoadState>('loading');
   const [catalog, setCatalog] = useState<CapabilityCatalogResponse>();
   const [catalogError, setCatalogError] = useState<UiError>();
+  const [instanceState, setInstanceState] = useState<LoadState>('loading');
+  const [instanceDiscovery, setInstanceDiscovery] = useState<LocalAgentInstanceDiscoveryResponse>();
+  const [instanceError, setInstanceError] = useState<UiError>();
   const [draft, setDraft] = useState<AgentDraft>(emptyDraft);
   const [idEdited, setIdEdited] = useState(false);
   const [building, setBuilding] = useState(false);
@@ -1587,6 +1745,7 @@ export const App = (): ReactNode => {
   const [prepareResult, setPrepareResult] = useState<PrepareAgentResult>();
   const buildAbort = useRef<AbortController | undefined>(undefined);
   const prepareAbort = useRef<AbortController | undefined>(undefined);
+  const instancesAbort = useRef<AbortController | undefined>(undefined);
 
   const loadCatalog = (): void => {
     const controller = new AbortController();
@@ -1601,6 +1760,27 @@ export const App = (): ReactNode => {
         if (controller.signal.aborted) return;
         setCatalogError(uiError(error, 'The Capability Registry could not be loaded.'));
         setCatalogState('error');
+      });
+  };
+
+  const loadInstances = (): void => {
+    instancesAbort.current?.abort();
+    const controller = new AbortController();
+    instancesAbort.current = controller;
+    setInstanceState('loading');
+    setInstanceError(undefined);
+    void getLocalAgentInstances(controller.signal)
+      .then((response) => {
+        setInstanceDiscovery(response);
+        setInstanceState('ready');
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setInstanceError(uiError(error, 'Local Agent Instances could not be discovered.'));
+        setInstanceState('error');
+      })
+      .finally(() => {
+        if (instancesAbort.current === controller) instancesAbort.current = undefined;
       });
   };
 
@@ -1619,10 +1799,30 @@ export const App = (): ReactNode => {
     return () => controller.abort();
   }, []);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    instancesAbort.current = controller;
+    void getLocalAgentInstances(controller.signal)
+      .then((response) => {
+        setInstanceDiscovery(response);
+        setInstanceState('ready');
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setInstanceError(uiError(error, 'Local Agent Instances could not be discovered.'));
+        setInstanceState('error');
+      })
+      .finally(() => {
+        if (instancesAbort.current === controller) instancesAbort.current = undefined;
+      });
+    return () => controller.abort();
+  }, []);
+
   useEffect(
     () => () => {
       buildAbort.current?.abort();
       prepareAbort.current?.abort();
+      instancesAbort.current?.abort();
     },
     [],
   );
@@ -1765,6 +1965,7 @@ export const App = (): ReactNode => {
     void prepareAgent(builtDefinition, buildResult.lockDigest, controller.signal)
       .then((result) => {
         setPrepareResult(result);
+        loadInstances();
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
@@ -1805,11 +2006,15 @@ export const App = (): ReactNode => {
           catalog={catalog}
           catalogState={catalogState}
           draft={draft}
+          instanceDiscovery={instanceDiscovery}
+          instanceError={instanceError}
+          instanceState={instanceState}
           onApplyPreset={applyPreset}
           onDraftChange={changeDraft}
           onEdit={editDefinition}
           onPrepare={prepare}
           onProfileChange={changeProfile}
+          onRetryInstances={loadInstances}
           onSubmit={submit}
           onToggleCapability={toggleCapability}
           policyIssues={selectionPlan.issues}
