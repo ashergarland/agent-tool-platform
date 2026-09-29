@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { z } from 'zod';
 
 export const capabilityRegistrySchemaVersion = '1.2.0';
@@ -53,7 +54,13 @@ const semanticVersionPattern =
 const repositoryReferencePattern = /^(?!\/)(?![A-Za-z]:)(?!.*\\)(?!.*(?:^|\/)\.\.(?:\/|$))\S+$/u;
 const httpHeaderNamePattern = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
 const npmExecutableNamePattern = /^[a-z0-9][a-z0-9._-]*$/u;
-const npmSha512IntegrityPattern = /^sha512-[A-Za-z0-9+/]{86}==$/u;
+const npmSha512IntegrityPattern = /^sha512-[A-Za-z0-9+/]{85}[AQgw]==$/u;
+
+const isCanonicalSha512Integrity = (value: string): boolean => {
+  const encoded = value.slice('sha512-'.length);
+  const decoded = Buffer.from(encoded, 'base64');
+  return decoded.byteLength === 64 && decoded.toString('base64') === encoded;
+};
 
 const kebabIdentifierSchema = z
   .string()
@@ -98,7 +105,8 @@ export const npmExecutableNameSchema = z
 export const npmPackageIntegritySchema = z
   .string()
   .max(95)
-  .regex(npmSha512IntegrityPattern, 'must be one canonical sha512 Subresource Integrity value');
+  .regex(npmSha512IntegrityPattern, 'must be one canonical sha512 Subresource Integrity value')
+  .refine(isCanonicalSha512Integrity, 'must encode exactly 64 SHA-512 bytes canonically');
 
 export const npmLocalArtifactExecutionSchema = z.strictObject({
   schemaVersion: z.literal(localArtifactExecutionSchemaVersion),

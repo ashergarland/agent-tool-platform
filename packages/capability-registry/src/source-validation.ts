@@ -116,7 +116,7 @@ const artifactRegistryType = (artifact: CapabilityArtifact): 'npm' | 'oci' | und
   return undefined;
 };
 
-const packageBinTarget = (
+export const packageBinTarget = (
   packageName: string,
   bin: z.infer<typeof packageManifestSchema>['bin'],
   executableName: string,
@@ -125,7 +125,7 @@ const packageBinTarget = (
     const impliedName = packageName.slice(packageName.lastIndexOf('/') + 1);
     return impliedName === executableName ? bin : undefined;
   }
-  return bin?.[executableName];
+  return bin !== undefined && Object.hasOwn(bin, executableName) ? bin[executableName] : undefined;
 };
 
 export const verifyCapabilitySource = async (

@@ -59,13 +59,13 @@ export const runNpmLocalArtifactConformance = async (
   );
   const canonicalRoot = await realpath(options.materialization.root);
   const fromRoot = relative(canonicalRoot, verified.launch.entrypointPath);
-  run.check(
-    'the verified entrypoint stays beneath the consumer root',
+  const entrypointConfined =
     fromRoot.length > 0 &&
-      fromRoot !== '..' &&
-      !fromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) &&
-      !isAbsolute(fromRoot),
-  );
+    fromRoot !== '..' &&
+    !fromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) &&
+    !isAbsolute(fromRoot);
+  run.check('the verified entrypoint stays beneath the consumer root', entrypointConfined);
+  if (!entrypointConfined) return run.finish(options);
 
   const execution = await runBoundedProcess({
     executablePath: verified.launch.executablePath,

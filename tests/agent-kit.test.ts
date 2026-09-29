@@ -19,6 +19,7 @@ import {
   parsePreparedAgentInstance,
   parseAgentDefinition,
   prepareAgent,
+  readinessSnapshotSchema,
   resolveAgentDefinition,
   resolveRegistryCapability,
   serializeAgentLock,
@@ -652,6 +653,59 @@ describe('deterministic build outputs', () => {
           bindingKey: capability.binding.key,
           availableNames: [...capability.binding.requiredSecretNames],
         })),
+    });
+
+    it('rejects duplicate values in every readiness-evidence array', async () => {
+      const duplicateSnapshots: readonly ReadinessSnapshot[] = [
+        {
+          schemaVersion: 1,
+          availableLocalBindings: ['capability@1.0.0#local', 'capability@1.0.0#local'],
+        },
+        {
+          schemaVersion: 1,
+          availableRemoteBindings: ['capability@1.0.0#remote', 'capability@1.0.0#remote'],
+        },
+        {
+          schemaVersion: 1,
+          availableProviderPrerequisites: [
+            'capability@1.0.0#hybrid/provider',
+            'capability@1.0.0#hybrid/provider',
+          ],
+        },
+        {
+          schemaVersion: 1,
+          configuration: [
+            { bindingKey: 'capability@1.0.0#remote', availableNames: ['TOKEN'] },
+            { bindingKey: 'capability@1.0.0#remote', availableNames: ['OTHER_TOKEN'] },
+          ],
+        },
+        {
+          schemaVersion: 1,
+          configuration: [
+            {
+              bindingKey: 'capability@1.0.0#remote',
+              availableNames: ['TOKEN', 'TOKEN'],
+            },
+          ],
+        },
+      ];
+
+      for (const snapshot of duplicateSnapshots) {
+        expect(readinessSnapshotSchema.safeParse(snapshot).success).toBe(false);
+      }
+
+      const build = await buildComposition();
+      const duplicateLocalKey = build.capabilities[0]!.binding.key;
+      await expect(
+        prepareAgent(build, {
+          environmentId,
+          readinessSnapshot: {
+            schemaVersion: 1,
+            availableLocalBindings: [duplicateLocalKey, duplicateLocalKey],
+          },
+          driver: { execute: async () => ({ status: 'setup-required' }) },
+        }),
+      ).rejects.toMatchObject({ code: 'INVALID_PREPARATION_INPUT' });
     });
 
     it('creates a deterministic capability-neutral plan without host file contents', async () => {

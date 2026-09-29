@@ -24,7 +24,7 @@ const packageNamePattern = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$
 const semanticVersionPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 const executableNamePattern = /^[a-z0-9][a-z0-9._-]*$/u;
-const integrityPattern = /^sha512-[A-Za-z0-9+/]{86}==$/u;
+const integrityPattern = /^sha512-[A-Za-z0-9+/]{85}[AQgw]==$/u;
 const sha256Pattern = /^sha256:[0-9a-f]{64}$/u;
 const layoutPattern = /^artifacts\/npm\/sha256-[0-9a-f]{64}$/u;
 
@@ -63,6 +63,7 @@ export interface NpmLocalArtifactSpec {
 export type NpmArtifactSource =
   | {
       readonly kind: 'registry';
+      /** Trusted process-owned configuration; never derive this value from untrusted request input. */
       readonly registryUrl?: string;
     }
   | {
@@ -166,6 +167,13 @@ const fail = (
 const compareCodeUnits = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
 
+const isCanonicalSha512Integrity = (value: string): boolean => {
+  if (!integrityPattern.test(value)) return false;
+  const encoded = value.slice('sha512-'.length);
+  const decoded = Buffer.from(encoded, 'base64');
+  return decoded.byteLength === 64 && decoded.toString('base64') === encoded;
+};
+
 const normalizeLimits = (
   input: Partial<NpmArtifactMaterializationLimits> | undefined,
 ): NpmArtifactMaterializationLimits => {
@@ -196,7 +204,7 @@ const normalizeSpec = (input: NpmLocalArtifactSpec): NpmLocalArtifactSpec => {
   if (!executableNamePattern.test(input.binName) || input.binName.length > 100) {
     return fail('invalid-input', 'The npm executable selection is invalid.');
   }
-  if (!integrityPattern.test(input.integrity) || input.integrity.length > 95) {
+  if (!isCanonicalSha512Integrity(input.integrity) || input.integrity.length > 95) {
     return fail('invalid-input', 'The npm artifact integrity is invalid.');
   }
   if (input.lifecycleScripts !== 'forbidden') {
@@ -248,6 +256,7 @@ const isWithin = (root: string, candidate: string, includeRoot = false): boolean
 };
 
 const prepareRoot = async (input: string, create: boolean): Promise<string> => {
+  const driveQualifiedWindowsPath = /^[A-Za-z]:[\\/]/u.test(input);
   if (
     typeof input !== 'string' ||
     input.length === 0 ||
@@ -255,9 +264,13 @@ const prepareRoot = async (input: string, create: boolean): Promise<string> => {
     input.includes('\0') ||
     !isAbsolute(input) ||
     input.startsWith('\\\\') ||
-    input.startsWith('//')
+    input.startsWith('//') ||
+    (process.platform === 'win32' && !driveQualifiedWindowsPath)
   ) {
-    return fail('invalid-input', 'The materialization root must be an absolute local path.');
+    return fail(
+      'invalid-input',
+      'The materialization root must be an absolute local path, drive-qualified on Windows.',
+    );
   }
   const resolved = resolve(input);
   if (resolved === parse(resolved).root) {
@@ -295,7 +308,7 @@ const ensureDirectory = async (root: string, path: string): Promise<void> => {
   }
 };
 
-const publicHttpsUrl = (value: string, label: string): URL => {
+const restrictedHttpsUrl = (value: string, label: string): URL => {
   let url: URL;
   try {
     url = new URL(value);
@@ -304,6 +317,7 @@ const publicHttpsUrl = (value: string, label: string): URL => {
   }
   const hostname = url.hostname.toLowerCase().replace(/\.+$/u, '');
   const address = hostname.replace(/^\[|\]$/gu, '');
+  // Literal-host filtering is defense in depth, not a DNS or destination-address sandbox.
   if (
     url.protocol !== 'https:' ||
     url.username.length > 0 ||
@@ -323,13 +337,13 @@ const publicHttpsUrl = (value: string, label: string): URL => {
     /^f[cd][0-9a-f]{2}:/u.test(address) ||
     /^fe[89ab][0-9a-f]:/u.test(address)
   ) {
-    return fail('invalid-input', `${label} must be a public HTTPS URL.`);
+    return fail('invalid-input', `${label} must use HTTPS and pass literal-host restrictions.`);
   }
   return url;
 };
 
 const normalizedRegistryUrl = (input: string | undefined): string => {
-  const url = publicHttpsUrl(input ?? 'https://registry.npmjs.org/', 'The npm registry URL');
+  const url = restrictedHttpsUrl(input ?? 'https://registry.npmjs.org/', 'The npm registry URL');
   if (!url.pathname.endsWith('/')) url.pathname += '/';
   return url.toString();
 };
@@ -556,7 +570,10 @@ const fetchWithRedirects = async (
     if (location === null) {
       return fail('materialization-failed', 'The npm HTTPS redirect has no location.');
     }
-    currentUrl = publicHttpsUrl(new URL(location, currentUrl).toString(), 'The npm redirect URL');
+    currentUrl = restrictedHttpsUrl(
+      new URL(location, currentUrl).toString(),
+      'The npm redirect URL',
+    );
   }
   return fail('materialization-failed', 'The npm HTTPS request could not be completed.');
 };
@@ -665,7 +682,7 @@ const registryArchive = async (
     return fail('limit-exceeded', 'The npm package exceeds its file-count limit.');
   }
 
-  const tarballUrl = publicHttpsUrl(parsedMetadata.data.dist.tarball, 'The npm tarball URL');
+  const tarballUrl = restrictedHttpsUrl(parsedMetadata.data.dist.tarball, 'The npm tarball URL');
   const archiveResponse = await fetchWithRedirects(tarballUrl, 'application/octet-stream', context);
   await downloadArchive(
     archiveResponse,
@@ -694,7 +711,7 @@ const packageBinTarget = (
     const impliedName = packageName.slice(packageName.lastIndexOf('/') + 1);
     return impliedName === binName ? bin : undefined;
   }
-  return bin[binName];
+  return Object.hasOwn(bin, binName) ? bin[binName] : undefined;
 };
 
 const inspectInstalledPackage = async (

@@ -72,9 +72,10 @@ preserving independent package builds.
 
 ### HTTP client request mappings
 
-Registry schema `1.1.0` adds an optional binding-level HTTP client contract. The schema remains in
-the `schemas/v1/` major-version path because this is a backward-compatible minor addition for
-bindings that do not require request metadata.
+Registry schema `1.1.0` historically added an optional binding-level HTTP client contract. That
+shape addition remained in the `schemas/v1/` major-version path because bindings that did not
+require request metadata needed no new field. Registry documents still carry an exact schema
+version; the current `1.2.0` parser behavior is described below.
 
 An HTTP binding can map a named profile configuration requirement to one or more request headers:
 
@@ -117,8 +118,10 @@ accept it only when they can represent it faithfully.
 ### Local executable artifacts
 
 Registry schema `1.2.0` adds the optional, versioned `localExecution` contract to npm artifacts.
-The change is additive: an older entry shape without `localExecution` remains valid, but it is not
-materializable through the v1 reference materializer.
+The artifact shape change is additive: an older artifact shape without `localExecution` can be
+represented in a schema-`1.2.0` document, but it is not materializable through the v1 reference
+materializer. This is not a multi-version reader: the current parser requires document
+`schemaVersion: "1.2.0"` and rejects a complete `1.1.0` document.
 
 ```json
 {

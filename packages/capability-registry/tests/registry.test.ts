@@ -27,6 +27,7 @@ import {
   loadFirstPartyCapabilityRegistry,
   mutationDimensions,
   normalizeCapabilityEntry,
+  npmPackageIntegritySchema,
   providerDimensions,
   serializeCapabilityRegistry,
   validateAccountNeutrality,
@@ -38,6 +39,7 @@ import {
   type CapabilityRegistry,
   type RegistryJsonSchema,
 } from '../src/index.js';
+import { packageBinTarget } from '../src/source-validation.js';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const temporaryRoots: string[] = [];
@@ -483,6 +485,44 @@ describe('registry semantic validation', () => {
     expect(validateCapabilityEntryDocument(ast).errors.join('\n')).toContain(
       'Subresource Integrity',
     );
+  });
+
+  it('requires canonical SHA-512 SRI bytes and padding', () => {
+    const canonical =
+      'sha512-KLP86c/Ylp+oqCTVHuZdHwql2GX4Xfai59UEXUjWrFpzq/l1vMlMPWz44jFgXNaavAmiVl07y73oplVwnKXRxw==';
+    const noncanonicalAlias =
+      'sha512-KLP86c/Ylp+oqCTVHuZdHwql2GX4Xfai59UEXUjWrFpzq/l1vMlMPWz44jFgXNaavAmiVl07y73oplVwnKXRxx==';
+
+    expect(Buffer.from(canonical.slice(7), 'base64')).toEqual(
+      Buffer.from(noncanonicalAlias.slice(7), 'base64'),
+    );
+    expect(npmPackageIntegritySchema.safeParse(canonical).success).toBe(true);
+    expect(npmPackageIntegritySchema.safeParse('sha512-not-base64').success).toBe(false);
+    expect(npmPackageIntegritySchema.safeParse(`sha512-${'A'.repeat(84)}`).success).toBe(false);
+    expect(npmPackageIntegritySchema.safeParse(noncanonicalAlias).success).toBe(false);
+  });
+
+  it('selects only an own exact package bin property', () => {
+    expect(
+      packageBinTarget(
+        '@agent-tool-platform/example',
+        { 'agent-tool-example': 'dist/stdio.js' },
+        'agent-tool-example',
+      ),
+    ).toBe('dist/stdio.js');
+    expect(
+      packageBinTarget(
+        '@agent-tool-platform/example',
+        { 'agent-tool-example': 'dist/stdio.js' },
+        'missing-bin',
+      ),
+    ).toBeUndefined();
+
+    const inherited = Object.create({ constructor: 'dist/inherited.js' }) as Record<string, string>;
+    inherited['agent-tool-example'] = 'dist/stdio.js';
+    expect(
+      packageBinTarget('@agent-tool-platform/example', inherited, 'constructor'),
+    ).toBeUndefined();
   });
 
   it('rejects implicit or allowed npm lifecycle-script execution', async () => {

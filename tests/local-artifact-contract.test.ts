@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, parse } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as runtime from '@agent-tool-platform/runtime';
 import {
   capabilityEntrySchemaId,
   capabilityRegistrySchemaVersion,
@@ -15,9 +16,14 @@ import {
   buildVsCodeAgent,
   createNpmLocalArtifactPreparationDriver,
   createPreparedArtifactRealization,
+  isMaterializableResolvedNpmArtifact,
   prepareAgent,
   preparedArtifactRealizationSchema,
+  type PreparationAction,
   type PreparationDriver,
+  type PreparationDriverRequest,
+  type PreparationDriverResult,
+  type PreparedArtifactRealization,
 } from '@agent-tool-platform/agent-kit';
 import {
   buildChildEnvironment,
@@ -32,6 +38,7 @@ import { runNpmLocalArtifactConformance } from '@agent-tool-platform/testkit';
 const fixtureRoot = fileURLToPath(new URL('./fixtures/local-artifact-package', import.meta.url));
 const gitRevision = 'a'.repeat(40);
 const sha256 = `sha256:${'a'.repeat(64)}` as const;
+const canonicalFixtureIntegrity = `sha512-${Buffer.alloc(64, 1).toString('base64')}`;
 const temporaryRoots: string[] = [];
 
 const temporaryRoot = async (prefix: string): Promise<string> => {
@@ -41,6 +48,7 @@ const temporaryRoot = async (prefix: string): Promise<string> => {
 };
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
@@ -97,12 +105,31 @@ const specFor = (integrity: string): NpmLocalArtifactSpec => ({
   lifecycleScripts: 'forbidden',
 });
 
-const entryFor = (integrity: string): CapabilityEntry => ({
+interface FixtureIdentity {
+  readonly id: string;
+  readonly displayName: string;
+  readonly packageName: string;
+  readonly binName: string;
+  readonly sourceCapabilityId: string;
+}
+
+const defaultFixtureIdentity: FixtureIdentity = {
+  id: 'local-artifact-fixture',
+  displayName: 'Local Artifact Fixture',
+  packageName: '@agent-tool-platform/local-artifact-fixture',
+  binName: 'agent-tool-local-artifact-fixture',
+  sourceCapabilityId: 'io.github.ashergarland/local-artifact-fixture',
+};
+
+const entryFor = (
+  integrity: string,
+  identity: FixtureIdentity = defaultFixtureIdentity,
+): CapabilityEntry => ({
   $schema: capabilityEntrySchemaId,
   schemaVersion: capabilityRegistrySchemaVersion,
   kind: 'capability',
-  id: 'local-artifact-fixture',
-  displayName: 'Local Artifact Fixture',
+  id: identity.id,
+  displayName: identity.displayName,
   description: 'Immutable npm local artifact fixture.',
   publisher: {
     id: 'agent-tool-platform',
@@ -114,14 +141,14 @@ const entryFor = (integrity: string): CapabilityEntry => ({
     {
       id: 'npm-package',
       kind: 'npm',
-      identifier: '@agent-tool-platform/local-artifact-fixture',
+      identifier: identity.packageName,
       version: '1.2.3',
       availability: 'published',
       reference: 'v1.2.3',
       localExecution: {
         schemaVersion: 1,
         kind: 'node-package-bin',
-        bin: 'agent-tool-local-artifact-fixture',
+        bin: identity.binName,
         integrity,
         lifecycleScripts: 'forbidden',
       },
@@ -180,7 +207,7 @@ const entryFor = (integrity: string): CapabilityEntry => ({
     checks: ['mcp-metadata', 'routing-metadata', 'runtime-contract'],
   },
   source: {
-    capabilityId: 'io.github.ashergarland/local-artifact-fixture',
+    capabilityId: identity.sourceCapabilityId,
     repository: 'https://github.com/ashergarland/agent-tool-platform',
     revision: gitRevision,
     metadataVersion: '1.2.3',
@@ -192,11 +219,11 @@ const entryFor = (integrity: string): CapabilityEntry => ({
   },
 });
 
-const readerFor = (entry: CapabilityEntry): CapabilityRegistryReader => ({
-  listCapabilities: () => [entry],
-  getCapability: (id) => (id === entry.id ? entry : undefined),
-  listProfiles: (id) => (id === entry.id ? entry.profiles : undefined),
-  listBindings: (id) => (id === entry.id ? entry.bindings : undefined),
+const readerFor = (...entries: readonly CapabilityEntry[]): CapabilityRegistryReader => ({
+  listCapabilities: () => entries,
+  getCapability: (id) => entries.find((entry) => entry.id === id),
+  listProfiles: (id) => entries.find((entry) => entry.id === id)?.profiles,
+  listBindings: (id) => entries.find((entry) => entry.id === id)?.bindings,
 });
 
 const definition = {
@@ -207,6 +234,31 @@ const definition = {
   instructions: 'Use the exact prepared local capability.',
   capabilities: [{ id: 'local-artifact-fixture', version: '1.2.3' }],
 } as const;
+
+const secondaryFixtureIdentity: FixtureIdentity = {
+  id: 'local-artifact-fixture-secondary',
+  displayName: 'Secondary Local Artifact Fixture',
+  packageName: '@agent-tool-platform/local-artifact-fixture-secondary',
+  binName: 'agent-tool-local-artifact-fixture-secondary',
+  sourceCapabilityId: 'io.github.ashergarland/local-artifact-fixture-secondary',
+};
+
+const buildFixtureAgent = async (
+  integrity: string,
+  identities: readonly FixtureIdentity[] = [defaultFixtureIdentity],
+) => {
+  const entries = identities.map((identity) => entryFor(integrity, identity));
+  return buildVsCodeAgent(
+    {
+      ...definition,
+      capabilities: identities.map((identity) => ({
+        id: identity.id,
+        version: '1.2.3' as const,
+      })),
+    },
+    { registry: readerFor(...entries) },
+  );
+};
 
 const materializationOptions = (
   root: string,
@@ -237,6 +289,88 @@ const executePreparedLaunch = async (
   return result.stdout;
 };
 
+type LocalArtifactPreparationAction = Extract<
+  PreparationAction,
+  { readonly kind: 'verify-local-artifact' | 'make-local-artifact-available' }
+>;
+
+interface MutableLocalArtifactAction {
+  binding: { key: string };
+  artifact: {
+    identifier: string;
+    version: string;
+    localExecution?: {
+      bin: string;
+      integrity?: string;
+      lifecycleScripts: string;
+    };
+  };
+}
+
+const fakeRealizationFor = (
+  action: LocalArtifactPreparationAction,
+): PreparedArtifactRealization => {
+  if (!isMaterializableResolvedNpmArtifact(action.artifact)) {
+    throw new Error('expected a materializable npm artifact action');
+  }
+  return createPreparedArtifactRealization({
+    binding: action.binding,
+    artifact: action.artifact,
+    disposition: 'newly-materialized',
+    materialization: {
+      kind: 'npm',
+      layout: npmArtifactLayoutIdentity({
+        packageName: action.artifact.identifier,
+        version: action.artifact.version,
+        binName: action.artifact.localExecution.bin,
+        integrity: action.artifact.localExecution.integrity,
+        lifecycleScripts: action.artifact.localExecution.lifecycleScripts,
+      }),
+    },
+    launch: {
+      kind: 'node',
+      executablePath: process.execPath,
+      entrypointPath: join(
+        parse(process.execPath).root,
+        'agent-tool-platform-artifacts',
+        `${action.binding.capabilityId}.mjs`,
+      ),
+    },
+    verification: {
+      status: 'verified',
+      integrity: action.artifact.localExecution.integrity,
+      installationDigest: `sha256:${createHash('sha256').update(action.actionId).digest('hex')}`,
+      fileCount: 1,
+      totalBytes: 1,
+    },
+  });
+};
+
+type HostPreparationRequest = Extract<
+  PreparationDriverRequest,
+  { readonly action: { readonly kind: 'prepare-host-integration' } }
+>;
+
+const driverWithFakeRealizations = (
+  prepareHost: (request: HostPreparationRequest) => PreparationDriverResult,
+): PreparationDriver => ({
+  execute: async (request) => {
+    if (
+      request.action.kind === 'verify-local-artifact' ||
+      request.action.kind === 'make-local-artifact-available'
+    ) {
+      return {
+        status: 'success',
+        artifactRealization: fakeRealizationFor(request.action),
+      };
+    }
+    if ('artifactRealizations' in request) {
+      return prepareHost(request);
+    }
+    return { status: 'setup-required' };
+  },
+});
+
 describe('npm local artifact materializer', () => {
   it('passes reusable idempotence, launch, lifecycle, confinement, and corruption conformance', async () => {
     const packed = await packFixture();
@@ -254,6 +388,38 @@ describe('npm local artifact materializer', () => {
     });
 
     expect(result.failures).toEqual([]);
+  }, 30_000);
+
+  it('stops conformance before executing or corrupting an escaped entrypoint', async () => {
+    const packed = await packFixture();
+    const root = await temporaryRoot('atp-artifact-conformance-escape-');
+    const outsideRoot = await temporaryRoot('atp-artifact-conformance-outside-');
+    const outsideEntrypoint = join(outsideRoot, 'outside.mjs');
+    const outsideContents = 'throw new Error("escaped entrypoint must not execute");\n';
+    await writeFile(outsideEntrypoint, outsideContents, 'utf8');
+    const actualVerify = runtime.verifyNpmLocalArtifact;
+    vi.spyOn(runtime, 'verifyNpmLocalArtifact').mockImplementation(async (...args) => {
+      const verified = await actualVerify(...args);
+      return {
+        ...verified,
+        launch: { ...verified.launch, entrypointPath: outsideEntrypoint },
+      };
+    });
+    const execution = vi
+      .spyOn(runtime, 'runBoundedProcess')
+      .mockRejectedValue(new Error('escaped entrypoint execution was not gated'));
+
+    const result = await runNpmLocalArtifactConformance({
+      spec: specFor(packed.integrity),
+      materialization: materializationOptions(root, packed.archivePath),
+      throwOnFailure: false,
+    });
+
+    expect(result.failures.map((failure) => failure.name)).toEqual([
+      'the verified entrypoint stays beneath the consumer root',
+    ]);
+    expect(execution).not.toHaveBeenCalled();
+    expect(await readFile(outsideEntrypoint, 'utf8')).toBe(outsideContents);
   }, 30_000);
 
   it('converges concurrent same-identity materialization on one verified layout', async () => {
@@ -354,6 +520,34 @@ describe('npm local artifact materializer', () => {
       }),
     ).rejects.toMatchObject({ code: 'invalid-input' });
   });
+
+  it('rejects malformed, wrong-length, and noncanonical SHA-512 SRI', () => {
+    const canonical =
+      'sha512-KLP86c/Ylp+oqCTVHuZdHwql2GX4Xfai59UEXUjWrFpzq/l1vMlMPWz44jFgXNaavAmiVl07y73oplVwnKXRxw==';
+    const noncanonicalAlias =
+      'sha512-KLP86c/Ylp+oqCTVHuZdHwql2GX4Xfai59UEXUjWrFpzq/l1vMlMPWz44jFgXNaavAmiVl07y73oplVwnKXRxx==';
+    expect(Buffer.from(canonical.slice(7), 'base64')).toEqual(
+      Buffer.from(noncanonicalAlias.slice(7), 'base64'),
+    );
+    expect(() => npmArtifactLayoutIdentity(specFor(canonical))).not.toThrow();
+    expect(() => npmArtifactLayoutIdentity(specFor('sha512-not-base64'))).toThrow(/integrity/iu);
+    expect(() => npmArtifactLayoutIdentity(specFor(`sha512-${'A'.repeat(84)}`))).toThrow(
+      /integrity/iu,
+    );
+    expect(() => npmArtifactLayoutIdentity(specFor(noncanonicalAlias))).toThrow(/integrity/iu);
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'rejects current-drive-rooted Windows materialization roots',
+    async () => {
+      const packed = await packFixture();
+      await expect(
+        materializeNpmLocalArtifact(specFor(packed.integrity), {
+          ...materializationOptions('\\atp-root', packed.archivePath),
+        }),
+      ).rejects.toMatchObject({ code: 'invalid-input' });
+    },
+  );
 
   it('bounds HTTPS registry redirects and archive bytes through an injectable network seam', async () => {
     const packed = await packFixture();
@@ -483,6 +677,11 @@ describe('Agent Kit prepared artifact realization', () => {
         const document = JSON.parse(mcpFile.content) as {
           servers: Record<string, { command: string; args: string[]; type: 'stdio' }>;
         };
+        expect(document.servers['local-artifact-fixture']).toEqual({
+          type: 'stdio',
+          command: 'npx',
+          args: ['-y', '@agent-tool-platform/local-artifact-fixture@1.2.3'],
+        });
         const realization = request.artifactRealizations[0];
         if (realization !== undefined) {
           document.servers['local-artifact-fixture'] = {
@@ -580,7 +779,12 @@ describe('Agent Kit prepared artifact realization', () => {
         schemaVersion: 1,
         availableLocalBindings: [build.capabilities[0]!.binding.key],
       },
-      hostIntegration: 'available',
+      driver: {
+        execute: async (request) =>
+          request.action.kind === 'prepare-host-integration'
+            ? { status: 'success' }
+            : { status: 'setup-required' },
+      },
       clock: { now: () => new Date('2026-09-28T20:00:00.000Z') },
     });
 
@@ -588,6 +792,7 @@ describe('Agent Kit prepared artifact realization', () => {
     expect(result.actionResults[0]?.status).toBe('setup-required');
     expect(result.instance.state).toBe('NEEDS_SETUP');
     expect(result.runnable).toBe(false);
+    expect(result.artifactRealizations).toEqual([]);
   });
 
   it('rejects status-only artifact success and host integration that ignores a realization', async () => {
@@ -622,6 +827,225 @@ describe('Agent Kit prepared artifact realization', () => {
       }),
     ).rejects.toMatchObject({ code: 'INVALID_PREPARATION_RESULT' });
   }, 30_000);
+
+  it.each([
+    {
+      name: 'binding identity',
+      mutate: (action: MutableLocalArtifactAction) => {
+        action.binding.key = 'mutated@1.2.3#local-package';
+      },
+    },
+    {
+      name: 'package identity',
+      mutate: (action: MutableLocalArtifactAction) => {
+        action.artifact.identifier = '@agent-tool-platform/mutated-fixture';
+      },
+    },
+    {
+      name: 'artifact version',
+      mutate: (action: MutableLocalArtifactAction) => {
+        action.artifact.version = '1.2.4';
+      },
+    },
+    {
+      name: 'selected bin',
+      mutate: (action: MutableLocalArtifactAction) => {
+        if (action.artifact.localExecution === undefined) throw new Error('missing execution');
+        action.artifact.localExecution.bin = 'agent-tool-mutated-fixture';
+      },
+    },
+    {
+      name: 'artifact SRI',
+      mutate: (action: MutableLocalArtifactAction) => {
+        if (action.artifact.localExecution === undefined) throw new Error('missing execution');
+        action.artifact.localExecution.integrity = `sha512-${Buffer.alloc(64, 7).toString(
+          'base64',
+        )}`;
+      },
+    },
+  ])(
+    'rejects a driver that mutates the planned $name and returns self-consistent evidence',
+    async ({ mutate }) => {
+      const build = await buildFixtureAgent(canonicalFixtureIntegrity);
+      const lockText = build.lockText;
+      const driver: PreparationDriver = {
+        execute: async (request) => {
+          if (
+            request.action.kind === 'verify-local-artifact' ||
+            request.action.kind === 'make-local-artifact-available'
+          ) {
+            mutate(request.action as unknown as MutableLocalArtifactAction);
+            return {
+              status: 'success',
+              artifactRealization: fakeRealizationFor(request.action),
+            };
+          }
+          return { status: 'success' };
+        },
+      };
+
+      await expect(
+        prepareAgent(build, {
+          environmentId: 'artifact-proof',
+          readinessSnapshot: { schemaVersion: 1 },
+          driver,
+        }),
+      ).rejects.toMatchObject({ code: 'INVALID_PREPARATION_RESULT' });
+      expect(build.lockText).toBe(lockText);
+    },
+  );
+
+  it('rejects a driver that mutates the locked lifecycle policy', async () => {
+    const build = await buildFixtureAgent(canonicalFixtureIntegrity);
+    const driver: PreparationDriver = {
+      execute: async (request) => {
+        if (
+          request.action.kind === 'verify-local-artifact' ||
+          request.action.kind === 'make-local-artifact-available'
+        ) {
+          const original = fakeRealizationFor(request.action);
+          const mutableAction = request.action as unknown as {
+            artifact: { localExecution: { lifecycleScripts: string } };
+          };
+          mutableAction.artifact.localExecution.lifecycleScripts = 'allowed';
+          return {
+            status: 'success',
+            artifactRealization: {
+              ...original,
+              artifact: structuredClone(request.action.artifact),
+            } as unknown as PreparedArtifactRealization,
+          };
+        }
+        return { status: 'success' };
+      },
+    };
+
+    await expect(
+      prepareAgent(build, {
+        environmentId: 'artifact-proof',
+        readinessSnapshot: { schemaVersion: 1 },
+        driver,
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_PREPARATION_RESULT' });
+  });
+
+  it('accepts one exact host realization acknowledgement', async () => {
+    const build = await buildFixtureAgent(canonicalFixtureIntegrity);
+    const result = await prepareAgent(build, {
+      environmentId: 'artifact-proof',
+      readinessSnapshot: { schemaVersion: 1 },
+      driver: driverWithFakeRealizations((request) => ({
+        status: 'success',
+        consumedArtifactRealizationIds: request.artifactRealizations.map(
+          (realization) => realization.realizationId,
+        ),
+      })),
+    });
+
+    expect(result.instance.state).toBe('READY');
+    expect(result.artifactRealizations).toHaveLength(1);
+  });
+
+  it('accepts exact host acknowledgement independent of request order', async () => {
+    const build = await buildFixtureAgent(canonicalFixtureIntegrity, [
+      defaultFixtureIdentity,
+      secondaryFixtureIdentity,
+    ]);
+    const result = await prepareAgent(build, {
+      environmentId: 'artifact-proof',
+      readinessSnapshot: { schemaVersion: 1 },
+      driver: driverWithFakeRealizations((request) => {
+        const mutableRealizations = request.artifactRealizations as PreparedArtifactRealization[];
+        mutableRealizations.reverse();
+        return {
+          status: 'success',
+          consumedArtifactRealizationIds: mutableRealizations.map(
+            (realization) => realization.realizationId,
+          ),
+        };
+      }),
+    });
+
+    expect(result.instance.state).toBe('READY');
+    expect(result.artifactRealizations).toHaveLength(2);
+  });
+
+  it.each([
+    {
+      name: 'duplicate acknowledgement',
+      acknowledge: (ids: readonly string[]) => [ids[0]!, ids[0]!],
+    },
+    {
+      name: 'unknown acknowledgement',
+      acknowledge: () => [`sha256:${'f'.repeat(64)}`],
+    },
+    {
+      name: 'missing acknowledgements',
+      acknowledge: () => [],
+    },
+    {
+      name: 'one missing acknowledgement',
+      acknowledge: (ids: readonly string[]) => [ids[0]!],
+    },
+    {
+      name: 'extra acknowledgement',
+      acknowledge: (ids: readonly string[]) => [...ids, `sha256:${'f'.repeat(64)}`],
+    },
+  ])('rejects host $name', async ({ acknowledge }) => {
+    const build = await buildFixtureAgent(canonicalFixtureIntegrity, [
+      defaultFixtureIdentity,
+      secondaryFixtureIdentity,
+    ]);
+    await expect(
+      prepareAgent(build, {
+        environmentId: 'artifact-proof',
+        readinessSnapshot: { schemaVersion: 1 },
+        driver: driverWithFakeRealizations((request) => ({
+          status: 'success',
+          consumedArtifactRealizationIds: acknowledge(
+            request.artifactRealizations.map((realization) => realization.realizationId),
+          ),
+        })),
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_PREPARATION_RESULT' });
+  });
+
+  it('retains the host expected set when the driver clears or replaces request aliases', async () => {
+    const build = await buildFixtureAgent(canonicalFixtureIntegrity);
+    await expect(
+      prepareAgent(build, {
+        environmentId: 'artifact-proof',
+        readinessSnapshot: { schemaVersion: 1 },
+        driver: driverWithFakeRealizations((request) => {
+          (request.artifactRealizations as PreparedArtifactRealization[]).splice(0);
+          return { status: 'success' };
+        }),
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_PREPARATION_RESULT' });
+
+    const replacementBuild = await buildFixtureAgent(canonicalFixtureIntegrity);
+    const result = await prepareAgent(replacementBuild, {
+      environmentId: 'artifact-proof',
+      readinessSnapshot: { schemaVersion: 1 },
+      driver: driverWithFakeRealizations((request) => {
+        const originalIds = request.artifactRealizations.map(
+          (realization) => realization.realizationId,
+        );
+        const mutable = request.artifactRealizations as PreparedArtifactRealization[];
+        mutable[0] = {
+          ...mutable[0]!,
+          realizationId: `sha256:${'f'.repeat(64)}`,
+        };
+        return {
+          status: 'success',
+          consumedArtifactRealizationIds: originalIds,
+        };
+      }),
+    });
+
+    expect(result.instance.state).toBe('READY');
+    expect(result.artifactRealizations[0]?.realizationId).not.toBe(`sha256:${'f'.repeat(64)}`);
+  });
 
   it('maps an exact integrity failure to UNAVAILABLE instead of false readiness', async () => {
     const packed = await packFixture();

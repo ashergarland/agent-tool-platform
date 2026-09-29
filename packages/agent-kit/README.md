@@ -2,11 +2,13 @@
 
 The host-neutral composition engine beneath Agent Builder.
 
-Agent Kit converts a canonical agent definition into a validated, reproducible build. It resolves
-capability releases through a narrow registry reader, selects a compatible six-dimensional
-capability profile, generates `agent.lock`, composes bounded instructions, produces a readiness
-plan, and delegates host files to an adapter. It can then prepare that immutable build in one
-specific environment and produce a validated Agent Instance record.
+Agent Kit converts a canonical agent definition into a validated, reproducible portable build. It
+resolves capability releases through a narrow registry reader, selects a compatible
+six-dimensional capability profile, generates `agent.lock`, composes bounded instructions,
+produces a readiness plan, and delegates host files to an adapter. Portable Build reproducibility
+does not claim byte-identical npm dependency trees across independent environments. Agent Kit can
+prepare that immutable build in one specific environment and produce a validated Agent Instance
+record.
 
 The package and its sibling first-party registry are public. Their checked-in development manifests
 deliberately stay private; release stamping removes those guards only in an ephemeral candidate. An
@@ -160,13 +162,15 @@ adapter can express it faithfully. Missing or unsupported transport semantics re
 Unauthenticated remote HTTP remains compatible, and local/hybrid stdio configuration continues to
 use environment-variable input references.
 
-Lock schema `3` persists the selected client mapping and the portable local execution contract,
-including exact npm bin selection, immutable npm integrity, and lifecycle policy. Registry entry
-digests also cover the complete source mapping. This intentional schema change makes execution
-identity reproducible without putting an installation root or launch path in the lock. VS Code
-adapter schema `2` remains the Build-time adapter contract. Configuration values, endpoint values,
-credentials, absolute local paths, and live provider identifiers never enter `agent.lock` or
-generated Build files.
+Lock schema `3` replaces lock schema `2`; schema-2 locks are rejected, consumers must rebuild them
+through Agent Kit, and no lock-migration reader is provided. Schema `3` persists the selected
+client mapping and portable local execution contract: exact top-level npm package and version, bin
+selection, top-level tarball integrity, and lifecycle policy. Registry entry digests also cover the
+complete source mapping. This makes the portable top-level identity reproducible without putting
+an installation root or launch path in the lock; it does not pin a transitive npm dependency
+graph. VS Code adapter schema `2` remains the Build-time adapter contract. Configuration values,
+endpoint values, credentials, absolute local paths, and live provider identifiers never enter
+`agent.lock` or generated Build files.
 
 ## Readiness
 
@@ -262,11 +266,13 @@ ordinary setup produces `NEEDS_SETUP`; concrete unavailable evidence can produce
 telemetry updates, but H7 preparation does not manufacture either state.
 
 The readiness snapshot remains the semantic source of truth for ordinary binding readiness.
-Successful driver checks add only availability facts to an in-memory snapshot, after which Agent
-Kit calls `createReadinessPlan()` again. A materializable local artifact is stricter: a claimed
-snapshot key chooses `verify-local-artifact`, but Agent Kit temporarily removes that claim and adds
-it back only after the driver returns matching verified realization evidence. This keeps one
-readiness engine without letting a bare binding key prove an exact executable.
+Duplicate local, remote, provider, configuration-binding, or configuration-name evidence is
+invalid because repeated values cannot create additional evidence. Successful driver checks add
+only availability facts to an in-memory snapshot, after which Agent Kit calls
+`createReadinessPlan()` again. A materializable local artifact is stricter: a claimed snapshot key
+chooses `verify-local-artifact`, but Agent Kit removes every matching claim and adds one back only
+after the driver returns matching verified realization evidence. This keeps one readiness engine
+without letting any number of bare binding keys prove an exact executable.
 
 ### Local artifacts
 
@@ -287,6 +293,15 @@ absolute Node executable, exact installed entrypoint, full installed-tree digest
 byte count. It contains no secrets, endpoint values, arbitrary environment variables, prompts,
 workspace contents, or source code. The realization is returned in `PreparationResult`, not
 persisted in `AgentDefinition`, `agent.lock`, or `PreparedAgentInstance`.
+
+V1 pins only the top-level npm archive. Non-bundled transitive dependencies are not portably pinned,
+and an ordinary package-level `package-lock.json` does not make independent materializations
+reproducible. During first materialization, Node, npm, process-owned registry/network
+configuration, DNS/TLS, transitive metadata and artifacts, and npm resolution behavior are trusted
+inputs. The installed-tree digest is observed environment evidence, not portable dependency
+provenance, so two clean environments may accept different trees. Once accepted, that exact tree
+can be reverified. Consumers requiring a reproducible graph need a stronger future contract such
+as a dependency-free or bundled artifact or an integrity-pinned dependency graph.
 
 The v1 reference implementation handles only published npm Node-bin artifacts. An unsupported,
 unpublished, or incomplete artifact returns setup-required; concrete integrity, corruption, bound,
@@ -316,6 +331,12 @@ it was available. This is the next VS Code workspace seam: a host-specific layer
 portable Build-time package command with `launch.executablePath` and
 `launch.entrypointPath`, then return the consumed IDs. This milestone does not write a workspace or
 launch VS Code.
+
+Before each callback, Agent Kit retains an independent snapshot of the planned action, exact
+binding and artifact identity, and sorted expected realization-ID set. Drivers receive deep-cloned
+request data. Mutating an action or realization array therefore cannot rewrite Agent Kit's
+authority; returned local evidence is compared with the pre-callback lock identity, and host
+acknowledgement must be the exact expected set with no duplicate, missing, or unknown IDs.
 
 ## Prepared Agent Instance persistence
 

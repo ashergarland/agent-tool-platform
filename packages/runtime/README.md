@@ -123,15 +123,26 @@ The consumer owns and supplies the root. Runtime rejects a relative path, UNC pa
 or filesystem root and creates one deterministic
 `artifacts/npm/sha256-<immutable-identity>` layout beneath it. It never selects a home-directory
 default, performs a global install, changes an unrelated project manifest, uses `npm link`, searches
-sibling checkouts, or adds the result to `PATH`.
+sibling checkouts, or adds the result to `PATH`. On Windows, roots must be drive-qualified absolute
+local paths such as `C:\artifacts`; current-drive-rooted paths such as `\artifacts` and UNC/network
+roots are rejected. POSIX absolute paths remain valid on POSIX.
 
-The registry source path retrieves exact-version metadata and the selected tarball through public
-HTTPS with manual bounded redirects, bounded response bytes, cancellation, and bounded request
-duration. Metadata preflights installed bytes and file count, and Runtime verifies the streamed
-top-level archive against the locked SHA-512 SRI before installation. Tests may inject the fetch
-boundary, and offline consumers can instead supply a specific archive path; the same size and SRI
-verification applies. Normal conformance tests use that network-free path. Retrieval is separate
-from Registry loading; Registry remains metadata and discovery.
+The default registry is controlled by Runtime. A custom registry URL is trusted process-owned
+configuration for a programmatic consumer; it must never be derived from a browser request,
+package name, capability input, or other untrusted request data. Registry and redirect URLs require
+HTTPS, reject credentials, queries, and fragments, and apply bounded redirects, response bytes,
+cancellation, and request duration. Literal obvious loopback/private host forms are rejected as
+defense in depth. This hostname-string filtering is **not** a DNS, DNS-rebinding, or resolved
+destination-address security boundary.
+
+The registry source path retrieves exact-version metadata and the selected top-level tarball, then
+verifies the streamed archive against the locked SHA-512 SRI before installation. Metadata
+preflights reported installed bytes and file count. Tests may inject the fetch boundary, and
+offline consumers can instead supply a specific top-level archive path; the same archive-size and
+SRI verification applies. Supplying that archive avoids top-level retrieval, but it does not make
+an arbitrary dependency-bearing package network-free. The repository's dedicated fixture has no
+external dependencies, so that specific proof is fully network-free. Retrieval remains separate
+from Registry loading; Registry is metadata and discovery.
 
 Installation happens in a private staging project with `--ignore-scripts`, `--no-save`, and no
 package lock mutation outside that staging area. Runtime invokes npm as a bounded Node subprocess
@@ -142,13 +153,27 @@ extractor. After installation, Runtime validates package name, exact version, an
 target, rejects escaping or symlink entrypoints, bounds every path, file count, metadata record,
 and installed byte, and hashes the complete installed tree.
 
-The portable lock identity covers the exact selected top-level npm tarball, not a portable npm
-dependency lock graph. npm may resolve that tarball's declared dependencies inside staging. The
-archive byte limit is enforced while reading the selected tarball; dependency installation is
-confined by the staging root and subprocess bounds, and the full resulting tree must satisfy byte,
-file-count, and path limits before it can be committed. The complete tree digest belongs to the
-environment-specific prepared realization, so v1 guarantees repeat verification in that
-environment rather than claiming byte-identical dependency trees across independent environments.
+The portable v1 lock pins the exact top-level package name, version, selected bin, top-level
+tarball SHA-512 SRI, and forbidden lifecycle policy. It does **not** pin a portable transitive npm
+dependency graph. An ordinary package-level `package-lock.json` does not make this materialization
+contract reproducible. For a package with non-bundled dependencies, first materialization trusts
+the configured Node and npm executables, registry/network environment, DNS/TLS, transitive package
+metadata and artifacts selected by npm, and npm's dependency-resolution behavior. npm dependency
+traffic is outside Runtime's literal top-level fetch filter, and v1 does not promise network
+sandboxing against a malicious package or dependency graph.
+
+The archive byte limit is enforced while reading the selected top-level tarball. Installation is
+confined to staging and bounded by subprocess time and output, and the complete resulting tree must
+satisfy byte, file-count, and path limits before commit. Temporary extraction or dependency
+installation may transiently consume more disk space or inodes before that post-install validation;
+v1 does not provide an OS-level staging disk or inode quota.
+
+The complete installed-tree digest is observed environment evidence, not portable dependency
+provenance. Two clean environments may therefore accept different transitive trees for the same
+portable top-level lock. Once one tree is accepted, Runtime identifies its exact Node executable
+and entrypoint and re-verifies that particular tree exactly; corruption fails closed. Consumers
+that require reproducible dependency graphs need a stronger future contract, such as a
+dependency-free or bundled artifact or an integrity-pinned dependency graph.
 
 The committed environment manifest contains relative paths and verification digests only. Repeat
 verification revalidates package/bin identity and the full tree without reinstalling; missing

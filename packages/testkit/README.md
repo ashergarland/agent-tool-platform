@@ -91,9 +91,13 @@ deployment validator; it does not duplicate contract logic in testkit. See
 [`docs/deployment-contracts.md`](../../docs/deployment-contracts.md) for the canonical declaration
 path, safe fixtures, and source-checkout usage.
 
-`runNpmLocalArtifactConformance({ spec, materialization })` consumes a caller-supplied immutable npm
-archive, so the normal suite is deterministic and network-free. It materializes once, verifies
-without reinstalling, executes the exact prepared Node entrypoint without a shell, optionally checks
-a lifecycle-script marker was not created, and deliberately corrupts the entrypoint to prove repeat
-verification fails closed. Use a fresh temporary consumer root because the final corruption probe is
-destructive to that one fixture layout.
+`runNpmLocalArtifactConformance({ spec, materialization })` can consume a caller-supplied immutable
+top-level npm archive, avoiding top-level registry retrieval. Packages with non-bundled
+dependencies may still cause npm dependency traffic and are not independently reproducible under
+the v1 contract. The repository's dedicated dependency-free fixture makes its proof deterministic
+and network-free. The suite materializes once, verifies without reinstalling, executes the exact
+prepared Node entrypoint without a shell, optionally checks a lifecycle-script marker was not
+created, and deliberately corrupts the entrypoint to prove repeat verification fails closed. A
+failed entrypoint-confinement precondition stops the suite before execution or corruption. Use a
+fresh temporary consumer root because the final corruption probe is destructive to that one
+fixture layout.
