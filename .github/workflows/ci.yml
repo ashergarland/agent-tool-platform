@@ -71,7 +71,7 @@ jobs:
           path: coverage/lcov.info
 
   windows-runtime:
-    name: Windows confined files and scratch
+    name: Windows confinement and local artifacts
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -97,6 +97,9 @@ jobs:
 
       - name: Test Windows filesystem conformance
         run: npx vitest run tests/conformance.test.ts -t "root boundary conformance|scratch workspace conformance"
+
+      - name: Test Windows local artifact materialization
+        run: npx vitest run tests/local-artifact-contract.test.ts -t "passes reusable idempotence, launch, lifecycle, confinement, and corruption conformance|converges concurrent same-identity materialization on one verified layout|rejects current-drive-rooted Windows materialization roots"
 
   bicep:
     name: Bicep build and lint

@@ -51,6 +51,10 @@
       "types": "./dist/lifecycle.d.ts",
       "import": "./dist/lifecycle.js"
     },
+    "./local-artifact": {
+      "types": "./dist/local-artifact.d.ts",
+      "import": "./dist/local-artifact.js"
+    },
     "./mcp": {
       "types": "./dist/mcp.d.ts",
       "import": "./dist/mcp.js"

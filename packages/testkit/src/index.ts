@@ -35,6 +35,10 @@ export {
 export { runHttpConformance, type HttpConformanceOptions } from './http.js';
 export { runLifecycleConformance, type LifecycleConformanceOptions } from './lifecycle.js';
 export {
+  runNpmLocalArtifactConformance,
+  type NpmLocalArtifactConformanceOptions,
+} from './local-artifact.js';
+export {
   connectInMemoryMcpClient,
   runMcpConformance,
   type ConnectedMcpClient,

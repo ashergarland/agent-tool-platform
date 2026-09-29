@@ -25,16 +25,55 @@ export const readinessSnapshotSchema = z
       .default([]),
   })
   .superRefine((snapshot, context) => {
-    const seen = new Set<string>();
+    const reportDuplicates = (
+      values: readonly string[],
+      path: readonly (string | number)[],
+      label: string,
+    ): void => {
+      const seen = new Set<string>();
+      values.forEach((value, index) => {
+        if (seen.has(value)) {
+          context.addIssue({
+            code: 'custom',
+            path: [...path, index],
+            message: `duplicates ${label} ${value}`,
+          });
+        }
+        seen.add(value);
+      });
+    };
+
+    reportDuplicates(
+      snapshot.availableLocalBindings,
+      ['availableLocalBindings'],
+      'local binding evidence',
+    );
+    reportDuplicates(
+      snapshot.availableRemoteBindings,
+      ['availableRemoteBindings'],
+      'remote binding evidence',
+    );
+    reportDuplicates(
+      snapshot.availableProviderPrerequisites,
+      ['availableProviderPrerequisites'],
+      'provider prerequisite evidence',
+    );
+
+    const seenConfigurationBindings = new Set<string>();
     snapshot.configuration.forEach((entry, index) => {
-      if (seen.has(entry.bindingKey)) {
+      if (seenConfigurationBindings.has(entry.bindingKey)) {
         context.addIssue({
           code: 'custom',
           path: ['configuration', index, 'bindingKey'],
           message: `duplicates configuration for ${entry.bindingKey}`,
         });
       }
-      seen.add(entry.bindingKey);
+      seenConfigurationBindings.add(entry.bindingKey);
+      reportDuplicates(
+        entry.availableNames,
+        ['configuration', index, 'availableNames'],
+        `configuration evidence for ${entry.bindingKey}`,
+      );
     });
   });
 

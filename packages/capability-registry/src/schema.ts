@@ -1,8 +1,10 @@
+import { Buffer } from 'node:buffer';
 import { z } from 'zod';
 
-export const capabilityRegistrySchemaVersion = '1.1.0';
+export const capabilityRegistrySchemaVersion = '1.2.0';
 export const capabilityRegistryKind = 'capability-registry';
 export const capabilityEntryKind = 'capability';
+export const localArtifactExecutionSchemaVersion = 1;
 
 export const capabilityEntrySchemaId =
   'https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json';
@@ -51,6 +53,14 @@ const semanticVersionPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u;
 const repositoryReferencePattern = /^(?!\/)(?![A-Za-z]:)(?!.*\\)(?!.*(?:^|\/)\.\.(?:\/|$))\S+$/u;
 const httpHeaderNamePattern = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
+const npmExecutableNamePattern = /^[a-z0-9][a-z0-9._-]*$/u;
+const npmSha512IntegrityPattern = /^sha512-[A-Za-z0-9+/]{85}[AQgw]==$/u;
+
+const isCanonicalSha512Integrity = (value: string): boolean => {
+  const encoded = value.slice('sha512-'.length);
+  const decoded = Buffer.from(encoded, 'base64');
+  return decoded.byteLength === 64 && decoded.toString('base64') === encoded;
+};
 
 const kebabIdentifierSchema = z
   .string()
@@ -85,6 +95,26 @@ export const httpHeaderValuePrefixSchema = z
     /^(?!.*\$\{)[\x20-\x7e]*$/u,
     'must be a printable ASCII literal without variable interpolation',
   );
+
+export const npmExecutableNameSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(npmExecutableNamePattern, 'must be an exact lowercase npm bin name');
+
+export const npmPackageIntegritySchema = z
+  .string()
+  .max(95)
+  .regex(npmSha512IntegrityPattern, 'must be one canonical sha512 Subresource Integrity value')
+  .refine(isCanonicalSha512Integrity, 'must encode exactly 64 SHA-512 bytes canonically');
+
+export const npmLocalArtifactExecutionSchema = z.strictObject({
+  schemaVersion: z.literal(localArtifactExecutionSchemaVersion),
+  kind: z.literal('node-package-bin'),
+  bin: npmExecutableNameSchema,
+  integrity: npmPackageIntegritySchema.optional(),
+  lifecycleScripts: z.literal('forbidden'),
+});
 
 const providerPrerequisiteSchema = z.strictObject({
   id: kebabIdentifierSchema,
@@ -122,14 +152,29 @@ export const capabilityProfileSummarySchema = z.strictObject({
   stateEffects: z.array(z.enum(stateEffects)),
 });
 
-export const capabilityArtifactSchema = z.strictObject({
+const capabilityArtifactCommonShape = {
   id: kebabIdentifierSchema,
-  kind: z.enum(['npm', 'oci', 'source']),
   identifier: z.string().min(1).max(500).regex(/^\S+$/u, 'must not contain whitespace'),
   version: semanticVersionSchema,
   availability: z.enum(['published', 'declared', 'source-only']),
   reference: repositoryReferenceSchema,
-});
+} as const;
+
+export const capabilityArtifactSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    ...capabilityArtifactCommonShape,
+    kind: z.literal('npm'),
+    localExecution: npmLocalArtifactExecutionSchema.optional(),
+  }),
+  z.strictObject({
+    ...capabilityArtifactCommonShape,
+    kind: z.literal('oci'),
+  }),
+  z.strictObject({
+    ...capabilityArtifactCommonShape,
+    kind: z.literal('source'),
+  }),
+]);
 
 export const capabilityHttpHeaderMappingSchema = z.strictObject({
   name: httpHeaderNameSchema,
@@ -227,12 +272,27 @@ export type ReadinessSignal = (typeof readinessSignals)[number];
 export type ConformanceCheck = (typeof conformanceChecks)[number];
 export type CapabilityProfileSummary = z.infer<typeof capabilityProfileSummarySchema>;
 export type CapabilityArtifact = z.infer<typeof capabilityArtifactSchema>;
+export type NpmLocalArtifactExecution = z.infer<typeof npmLocalArtifactExecutionSchema>;
 export type CapabilityHttpHeaderMapping = z.infer<typeof capabilityHttpHeaderMappingSchema>;
 export type CapabilityBindingClient = z.infer<typeof capabilityBindingClientSchema>;
 export type CapabilityBinding = z.infer<typeof capabilityBindingSchema>;
 export type CapabilityEntry = z.infer<typeof capabilityEntrySchema>;
 export type CapabilityRegistry = z.infer<typeof capabilityRegistrySchema>;
 export type DeploymentProfileDimensions = z.infer<typeof deploymentProfileDimensionsSchema>;
+
+export type MaterializableNpmArtifact = Extract<CapabilityArtifact, { readonly kind: 'npm' }> & {
+  readonly availability: 'published';
+  readonly localExecution: NpmLocalArtifactExecution & {
+    readonly integrity: string;
+  };
+};
+
+export const isMaterializableNpmArtifact = (
+  artifact: CapabilityArtifact,
+): artifact is MaterializableNpmArtifact =>
+  artifact.kind === 'npm' &&
+  artifact.availability === 'published' &&
+  artifact.localExecution?.integrity !== undefined;
 
 export type RegistryJsonSchema = Readonly<Record<string, unknown>>;
 

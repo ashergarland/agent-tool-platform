@@ -390,7 +390,7 @@ describe('real first-party capability proofs', () => {
     });
   });
 
-  it('prepares the seven-capability Developer Optimization shape without live provider calls', async () => {
+  it('plans the seven-capability shape without treating unverified published artifacts as ready', async () => {
     const { reader } = await loadFirstPartyRegistry();
     const build = await buildVsCodeAgent(m6Definition, { registry: reader });
     const localBindings = build.capabilities.filter(
@@ -430,7 +430,17 @@ describe('real first-party capability proofs', () => {
       readinessSnapshot,
     });
     const execute = vi.fn(async (request: PreparationDriverRequest) => {
-      void request;
+      if (
+        (request.action.kind === 'verify-local-artifact' ||
+          request.action.kind === 'make-local-artifact-available') &&
+        request.action.artifact.kind === 'npm' &&
+        request.action.artifact.localExecution?.integrity !== undefined
+      ) {
+        return {
+          status: 'setup-required' as const,
+          reason: 'artifact-verification-required' as const,
+        };
+      }
       return { status: 'success' as const };
     });
     const driver: PreparationDriver = { execute };
@@ -477,7 +487,7 @@ describe('real first-party capability proofs', () => {
       ]),
     );
     expect(prepared.plan).toEqual(plan);
-    expect(prepared.instance.state).toBe('READY');
+    expect(prepared.instance.state).toBe('NEEDS_SETUP');
     expect(prepared.instance.state).not.toBe('ACTIVE');
     expect(prepared.instance.bindings).toHaveLength(7);
     expect(prepared.instance.bindings.filter((binding) => binding.mode === 'local')).toHaveLength(
@@ -487,13 +497,14 @@ describe('real first-party capability proofs', () => {
       1,
     );
     expect(
-      prepared.readiness.capabilities.every(
-        (item) => item.state === 'ready' || item.state === 'available-local',
-      ),
-    ).toBe(true);
-    expect(prepared.runnable).toBe(true);
-    expect(execute).toHaveBeenCalledTimes(1);
-    expect(execute.mock.calls[0]?.[0].action.kind).toBe('prepare-host-integration');
+      prepared.readiness.capabilities.filter((item) => item.state === 'local-setup-required'),
+    ).toEqual([expect.objectContaining({ id: 'ast-summarizer' })]);
+    expect(prepared.runnable).toBe(false);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls.map(([request]) => request.action.kind)).toEqual([
+      'verify-local-artifact',
+      'prepare-host-integration',
+    ]);
     expect(serializePreparedAgentInstance(prepared.instance)).not.toContain(
       'synthetic-secret-value',
     );

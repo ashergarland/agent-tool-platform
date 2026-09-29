@@ -62,22 +62,23 @@ describe('platform conformance', () => {
 
 ## Suites
 
-| Suite                              | Proves                                                                                                                          |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `runRegistryConformance`           | Unique names, published schemas, input and output validation, no leakage of an invalid handler result.                          |
-| `runRoutingConformance`            | Routing content quality, prerequisite and next-step references, state disclosure matching kind.                                 |
-| `runOpenApiConformance`            | One operation per tool, schemas derived from the registry, consequentiality following kind, shared error responses.             |
-| `runHttpConformance`               | Public and protected surfaces, request-id bounds and echo, cache headers, credential handling, normalized 404s.                 |
-| `runMcpConformance`                | Instructions published, tool metadata verbatim from the registry, read and write invocation, in-band failures.                  |
-| `runTransportParity`               | The same tool and input produce the same result over HTTP and MCP.                                                              |
-| `runAuthConformance`               | Credential strength enforcement, safe principal identity, production refusal of disabled auth.                                  |
-| `runConfigConformance`             | Capability config composes with the platform, blank handling, strict booleans, cross-field validation.                          |
-| `runLifecycleConformance`          | Start and stop hooks, readiness aggregation, draining behaviour, in-flight cancellation.                                        |
-| `runRootBoundaryConformance`       | In-root resolution plus confined preview/stream metadata, identity, size, regular-file, and symlink guarantees.                 |
-| `runScratchWorkspaceConformance`   | Lifetime existence, portable permission expectation, shutdown cleanup, and idempotent manual disposal.                          |
-| `runProcessConformance`            | No shell, timeouts, cancellation, output bounds, secret-free child environment, queue overflow.                                 |
-| `runMetadataConformance`           | Truthful metadata accepted, placeholders and version drift rejected.                                                            |
-| `runDeploymentContractConformance` | Public declaration and optional private instance accepted; corrupt versions, profile selection, secrets, and evidence rejected. |
+| Suite                              | Proves                                                                                                                               |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `runRegistryConformance`           | Unique names, published schemas, input and output validation, no leakage of an invalid handler result.                               |
+| `runRoutingConformance`            | Routing content quality, prerequisite and next-step references, state disclosure matching kind.                                      |
+| `runOpenApiConformance`            | One operation per tool, schemas derived from the registry, consequentiality following kind, shared error responses.                  |
+| `runHttpConformance`               | Public and protected surfaces, request-id bounds and echo, cache headers, credential handling, normalized 404s.                      |
+| `runMcpConformance`                | Instructions published, tool metadata verbatim from the registry, read and write invocation, in-band failures.                       |
+| `runTransportParity`               | The same tool and input produce the same result over HTTP and MCP.                                                                   |
+| `runAuthConformance`               | Credential strength enforcement, safe principal identity, production refusal of disabled auth.                                       |
+| `runConfigConformance`             | Capability config composes with the platform, blank handling, strict booleans, cross-field validation.                               |
+| `runLifecycleConformance`          | Start and stop hooks, readiness aggregation, draining behaviour, in-flight cancellation.                                             |
+| `runRootBoundaryConformance`       | In-root resolution plus confined preview/stream metadata, identity, size, regular-file, and symlink guarantees.                      |
+| `runScratchWorkspaceConformance`   | Lifetime existence, portable permission expectation, shutdown cleanup, and idempotent manual disposal.                               |
+| `runProcessConformance`            | No shell, timeouts, cancellation, output bounds, secret-free child environment, queue overflow.                                      |
+| `runNpmLocalArtifactConformance`   | Identity-derived layout, script-free install, exact prepared launch, idempotent verification, confinement, and corruption rejection. |
+| `runMetadataConformance`           | Truthful metadata accepted, placeholders and version drift rejected.                                                                 |
+| `runDeploymentContractConformance` | Public declaration and optional private instance accepted; corrupt versions, profile selection, secrets, and evidence rejected.      |
 
 ## Fixtures
 
@@ -89,3 +90,14 @@ version of each.
 deployment validator; it does not duplicate contract logic in testkit. See
 [`docs/deployment-contracts.md`](../../docs/deployment-contracts.md) for the canonical declaration
 path, safe fixtures, and source-checkout usage.
+
+`runNpmLocalArtifactConformance({ spec, materialization })` can consume a caller-supplied immutable
+top-level npm archive, avoiding top-level registry retrieval. Packages with non-bundled
+dependencies may still cause npm dependency traffic and are not independently reproducible under
+the v1 contract. The repository's dedicated dependency-free fixture makes its proof deterministic
+and network-free. The suite materializes once, verifies without reinstalling, executes the exact
+prepared Node entrypoint without a shell, optionally checks a lifecycle-script marker was not
+created, and deliberately corrupts the entrypoint to prove repeat verification fails closed. A
+failed entrypoint-confinement precondition stops the suite before execution or corruption. Use a
+fresh temporary consumer root because the final corruption probe is destructive to that one
+fixture layout.

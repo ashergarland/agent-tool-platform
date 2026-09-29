@@ -255,11 +255,11 @@ describe('Agent Builder service', () => {
       'make-local-artifact-available',
       'make-local-artifact-available',
       'make-local-artifact-available',
-      'prepare-host-integration',
       'verify-configuration',
       'verify-provider-prerequisite',
       'verify-provider-prerequisite',
       'verify-remote-connection',
+      'prepare-host-integration',
     ]);
   });
 
@@ -336,11 +336,15 @@ describe('Agent Builder service', () => {
     expect(JSON.stringify(prepared)).not.toMatch(/[A-Za-z]:\\/u);
   });
 
-  it('reaches READY only with controlled evidence and a controlled driver', async () => {
+  it('does not claim READY without the deferred exact-artifact environment adapter', async () => {
     const execute = vi.fn(async (request: PreparationDriverRequest) => {
       expect(request.environmentId).toBe('synthetic-vscode');
-      expect(request.action.kind).toBe('prepare-host-integration');
-      return { status: 'success' as const };
+      return request.action.kind === 'prepare-host-integration'
+        ? { status: 'success' as const }
+        : {
+            status: 'setup-required' as const,
+            reason: 'artifact-verification-required' as const,
+          };
     });
     const driver: PreparationDriver = { execute };
     const service = createBuilderService({
@@ -357,16 +361,31 @@ describe('Agent Builder service', () => {
       prepareRequest(build.lockDigest, 'synthetic-vscode'),
     );
 
-    expect(execute).toHaveBeenCalledTimes(1);
-    expect(prepared.instance.state).toBe('READY');
-    expect(prepared.preparation.runnable).toBe(true);
-    expect(prepared.setupRequirements).toEqual([]);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls.map(([request]) => request.action.kind)).toEqual([
+      'verify-local-artifact',
+      'prepare-host-integration',
+    ]);
+    expect(prepared.instance.state).toBe('NEEDS_SETUP');
+    expect(prepared.preparation.runnable).toBe(false);
+    expect(prepared.setupRequirements).toEqual([
+      expect.objectContaining({
+        action: expect.objectContaining({
+          concern: 'local-artifact',
+          capability: expect.objectContaining({ id: 'ast-summarizer' }),
+        }),
+        status: 'setup-required',
+      }),
+    ]);
     expect(prepared.preparation.hostIntegration.status).toBe('success');
-    expect(
-      prepared.preparation.actionResults.every(
-        ({ status }) => status === 'success' || status === 'already-ready',
-      ),
-    ).toBe(true);
+    expect(prepared.preparation.actionResults).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: expect.objectContaining({ kind: 'verify-local-artifact' }),
+          status: 'setup-required',
+        }),
+      ]),
+    );
 
     const production = createBuilderService();
     const productionBuild = await production.buildAgent(developerOptimizationPreset);

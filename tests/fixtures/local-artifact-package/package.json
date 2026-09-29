@@ -1,0 +1,16 @@
+{
+  "name": "@agent-tool-platform/local-artifact-fixture",
+  "version": "1.2.3",
+  "description": "Network-free fixture for the local artifact materialization contract.",
+  "type": "module",
+  "bin": {
+    "agent-tool-local-artifact-fixture": "bin/fixture.mjs"
+  },
+  "files": [
+    "bin",
+    "install-marker.cjs"
+  ],
+  "scripts": {
+    "install": "node install-marker.cjs"
+  }
+}

@@ -233,6 +233,27 @@ export const validateCapabilityConsistency = (
           `${source}: published artifact ${artifact.id} requires released version status`,
         );
       }
+      if (artifact.kind === 'npm' && artifact.localExecution !== undefined) {
+        if (
+          artifact.localExecution.integrity !== undefined &&
+          artifact.availability !== 'published'
+        ) {
+          errors.push(
+            `${source}: artifact ${artifact.id} immutable integrity requires published availability`,
+          );
+        }
+        const hasLocalStdioBinding = entry.bindings.some(
+          (binding) =>
+            binding.artifactId === artifact.id &&
+            binding.interface === 'stdio' &&
+            binding.availability !== 'remote',
+        );
+        if (!hasLocalStdioBinding) {
+          errors.push(
+            `${source}: artifact ${artifact.id} local execution requires a local or hybrid stdio binding`,
+          );
+        }
+      }
     }
 
     if (entry.version.status === 'released') {

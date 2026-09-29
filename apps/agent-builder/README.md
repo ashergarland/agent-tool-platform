@@ -262,6 +262,9 @@ Tests inject controlled evidence and a narrow driver to prove the same integrati
 runnable `READY` instance and can reconcile an existing instance with deterministic identity. That
 synthetic evidence is test-only. Builder does not run npm installation, package lifecycle scripts,
 OCI workloads, shell commands, provider provisioning, Azure calls, or arbitrary filesystem writes.
+No browser or Builder HTTP request can choose a package or custom npm registry for the Runtime
+materializer; production Builder does not instantiate that materializer or its process-owned
+registry configuration.
 
 ### Agent Instance boundary
 

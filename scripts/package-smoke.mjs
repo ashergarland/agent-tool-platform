@@ -79,6 +79,13 @@ const documentedExports = {
       'assertDeploymentContract',
       'capabilityProfileDeclarationJsonSchema',
       'deploymentInstanceJsonSchema',
+      'materializeNpmLocalArtifact',
+      'verifyNpmLocalArtifact',
+    ],
+    './artifacts': [
+      'materializeNpmLocalArtifact',
+      'npmArtifactLayoutIdentity',
+      'verifyNpmLocalArtifact',
     ],
     './capability': [
       'createAgentToolApplication',
@@ -111,8 +118,10 @@ const documentedExports = {
       'runProcessConformance',
       'runMetadataConformance',
       'runDeploymentContractConformance',
+      'runNpmLocalArtifactConformance',
     ],
     './deployment': ['runDeploymentContractConformance'],
+    './local-artifact': ['runNpmLocalArtifactConformance'],
   },
   '@agent-tool-platform/capability-registry': {
     '.': [
@@ -122,6 +131,8 @@ const documentedExports = {
       'capabilityEntryJsonSchema',
       'capabilityRegistryJsonSchema',
       'capabilityRegistrySchemaVersion',
+      'isMaterializableNpmArtifact',
+      'npmPackageIntegritySchema',
     ],
   },
   '@agent-tool-platform/agent-kit': {
@@ -132,7 +143,9 @@ const documentedExports = {
       'buildAgent',
       'buildVsCodeAgent',
       'createAgentLock',
+      'createNpmLocalArtifactPreparationDriver',
       'createPreparationPlan',
+      'createPreparedArtifactRealization',
       'createPreparedAgentInstanceIdentity',
       'digestAgentLock',
       'parsePreparedAgentInstance',
@@ -143,6 +156,7 @@ const documentedExports = {
       'preparationHostIntegrationEvidenceSchema',
       'preparationPlanSchema',
       'preparedAgentInstanceSchema',
+      'preparedArtifactRealizationSchema',
       'readinessCapabilityStateSchema',
       'serializeAgentLock',
       'serializePreparedAgentInstance',
@@ -611,7 +625,7 @@ const prepared = await prepareAgent(first, {
 });
 const serialized = serializePreparedAgentInstance(prepared.instance);
 if (
-  prepared.instance.state !== 'READY' ||
+  prepared.instance.state !== 'NEEDS_SETUP' ||
   parsePreparedAgentInstance(serialized).instanceId !== prepared.instance.instanceId
 ) {
   throw new Error('Agent preparation or instance serialization did not round-trip');

@@ -52,6 +52,10 @@
       "types": "./dist/auth/index.d.ts",
       "import": "./dist/auth/index.js"
     },
+    "./artifacts": {
+      "types": "./dist/artifacts/index.d.ts",
+      "import": "./dist/artifacts/index.js"
+    },
     "./capability": {
       "types": "./dist/capability/index.d.ts",
       "import": "./dist/capability/index.js"

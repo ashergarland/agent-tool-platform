@@ -3,11 +3,13 @@ import {
   capabilityRegistrySchemaVersion,
   httpHeaderNameSchema,
   httpHeaderValuePrefixSchema,
+  npmExecutableNameSchema,
+  npmPackageIntegritySchema,
 } from '@agent-tool-platform/capability-registry';
 import { deploymentProfileDimensionsSchema } from '@agent-tool-platform/runtime';
 
 export const AGENT_DEFINITION_SCHEMA_VERSION = 1;
-export const AGENT_LOCK_SCHEMA_VERSION = 2;
+export const AGENT_LOCK_SCHEMA_VERSION = 3;
 export const AGENT_BUILD_SCHEMA_VERSION = 1;
 export const AGENT_INSTANCE_SEAM_SCHEMA_VERSION = 1;
 
@@ -199,12 +201,21 @@ const resolvedArtifactCommonShape = {
   sourceRevision: z.string().regex(fullGitShaPattern, 'must be a lowercase 40-character Git SHA'),
 } as const;
 
+const resolvedNpmLocalExecutionSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  kind: z.literal('node-package-bin'),
+  bin: npmExecutableNameSchema,
+  integrity: npmPackageIntegritySchema.optional(),
+  lifecycleScripts: z.literal('forbidden'),
+});
+
 export const resolvedCapabilityArtifactSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     ...resolvedArtifactCommonShape,
     kind: z.literal('npm'),
     identifier: npmPackageIdentifierSchema,
     version: exactVersionSchema,
+    localExecution: resolvedNpmLocalExecutionSchema.optional(),
   }),
   z.strictObject({
     ...resolvedArtifactCommonShape,
@@ -219,6 +230,21 @@ export const resolvedCapabilityArtifactSchema = z.discriminatedUnion('kind', [
     version: exactVersionSchema,
   }),
 ]);
+
+export const materializableResolvedNpmArtifactSchema = z.strictObject({
+  ...resolvedArtifactCommonShape,
+  kind: z.literal('npm'),
+  identifier: npmPackageIdentifierSchema,
+  version: exactVersionSchema,
+  availability: z.literal('published'),
+  localExecution: z.strictObject({
+    schemaVersion: z.literal(1),
+    kind: z.literal('node-package-bin'),
+    bin: npmExecutableNameSchema,
+    integrity: npmPackageIntegritySchema,
+    lifecycleScripts: z.literal('forbidden'),
+  }),
+});
 
 const lockCapabilitySchema = z.strictObject({
   id: profileIdentifierSchema,
@@ -293,4 +319,12 @@ export const agentLockSchema = z.strictObject({
 export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
 export type CapabilitySelection = z.infer<typeof capabilitySelectionSchema>;
 export type ResolvedCapabilityArtifact = z.infer<typeof resolvedCapabilityArtifactSchema>;
+export type MaterializableResolvedNpmArtifact = z.infer<
+  typeof materializableResolvedNpmArtifactSchema
+>;
 export type AgentLock = z.infer<typeof agentLockSchema>;
+
+export const isMaterializableResolvedNpmArtifact = (
+  artifact: ResolvedCapabilityArtifact,
+): artifact is MaterializableResolvedNpmArtifact =>
+  materializableResolvedNpmArtifactSchema.safeParse(artifact).success;

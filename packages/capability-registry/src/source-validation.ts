@@ -9,6 +9,7 @@ const packageManifestSchema = z.object({
   name: z.string().min(1),
   version: z.string().min(1),
   private: z.boolean().optional(),
+  bin: z.union([z.string().min(1), z.record(z.string(), z.string().min(1))]).optional(),
 });
 
 const serverMetadataSchema = z.object({
@@ -115,6 +116,18 @@ const artifactRegistryType = (artifact: CapabilityArtifact): 'npm' | 'oci' | und
   return undefined;
 };
 
+export const packageBinTarget = (
+  packageName: string,
+  bin: z.infer<typeof packageManifestSchema>['bin'],
+  executableName: string,
+): string | undefined => {
+  if (typeof bin === 'string') {
+    const impliedName = packageName.slice(packageName.lastIndexOf('/') + 1);
+    return impliedName === executableName ? bin : undefined;
+  }
+  return bin !== undefined && Object.hasOwn(bin, executableName) ? bin[executableName] : undefined;
+};
+
 export const verifyCapabilitySource = async (
   entry: CapabilityEntry,
   root: string,
@@ -211,6 +224,19 @@ export const verifyCapabilitySource = async (
     if (artifact.kind === 'npm' && packageManifest.data.name !== artifact.identifier) {
       report(
         `npm artifact ${artifact.identifier} does not match package ${packageManifest.data.name}`,
+      );
+    }
+    if (
+      artifact.kind === 'npm' &&
+      artifact.localExecution !== undefined &&
+      packageBinTarget(
+        packageManifest.data.name,
+        packageManifest.data.bin,
+        artifact.localExecution.bin,
+      ) === undefined
+    ) {
+      report(
+        `npm artifact ${artifact.id} does not declare bin ${artifact.localExecution.bin} in package metadata`,
       );
     }
   }

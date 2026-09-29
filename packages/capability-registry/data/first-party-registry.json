@@ -1,12 +1,12 @@
 {
   "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-registry.schema.json",
-  "schemaVersion": "1.1.0",
+  "schemaVersion": "1.2.0",
   "kind": "capability-registry",
   "registryVersion": "0.0.0-development",
   "capabilities": [
     {
       "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
-      "schemaVersion": "1.1.0",
+      "schemaVersion": "1.2.0",
       "kind": "capability",
       "id": "ast-summarizer",
       "displayName": "AST Summarizer",
@@ -23,11 +23,18 @@
       "artifacts": [
         {
           "id": "npm-package",
-          "kind": "npm",
           "identifier": "@agent-tool-platform/ast-summarizer",
           "version": "0.1.1",
           "availability": "published",
-          "reference": "v0.1.1"
+          "reference": "v0.1.1",
+          "kind": "npm",
+          "localExecution": {
+            "schemaVersion": 1,
+            "kind": "node-package-bin",
+            "bin": "agent-tool-ast-summarizer",
+            "integrity": "sha512-KLP86c/Ylp+oqCTVHuZdHwql2GX4Xfai59UEXUjWrFpzq/l1vMlMPWz44jFgXNaavAmiVl07y73oplVwnKXRxw==",
+            "lifecycleScripts": "forbidden"
+          }
         }
       ],
       "links": {
@@ -115,7 +122,7 @@
     },
     {
       "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
-      "schemaVersion": "1.1.0",
+      "schemaVersion": "1.2.0",
       "kind": "capability",
       "id": "azure",
       "displayName": "Azure Agent Tool Server",
@@ -132,11 +139,11 @@
       "artifacts": [
         {
           "id": "oci-container",
-          "kind": "oci",
           "identifier": "ghcr.io/ashergarland/agent-tool-server-azure",
           "version": "0.3.0",
           "availability": "published",
-          "reference": "v0.3.0"
+          "reference": "v0.3.0",
+          "kind": "oci"
         }
       ],
       "links": {
@@ -324,7 +331,7 @@
     },
     {
       "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
-      "schemaVersion": "1.1.0",
+      "schemaVersion": "1.2.0",
       "kind": "capability",
       "id": "data-cruncher",
       "displayName": "Data Cruncher",
@@ -341,11 +348,11 @@
       "artifacts": [
         {
           "id": "npm-package",
-          "kind": "npm",
           "identifier": "agent-tool-server-data-cruncher",
           "version": "0.0.0-development",
           "availability": "declared",
-          "reference": "server.json#/packages/0"
+          "reference": "server.json#/packages/0",
+          "kind": "npm"
         }
       ],
       "links": {
@@ -436,7 +443,7 @@
     },
     {
       "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
-      "schemaVersion": "1.1.0",
+      "schemaVersion": "1.2.0",
       "kind": "capability",
       "id": "doc-rag",
       "displayName": "Documentation RAG",
@@ -453,11 +460,11 @@
       "artifacts": [
         {
           "id": "npm-package",
-          "kind": "npm",
           "identifier": "agent-tool-server-doc-rag",
           "version": "0.0.0-development",
           "availability": "declared",
-          "reference": "server.json#/packages/0"
+          "reference": "server.json#/packages/0",
+          "kind": "npm"
         }
       ],
       "links": {
@@ -547,7 +554,7 @@
     },
     {
       "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
-      "schemaVersion": "1.1.0",
+      "schemaVersion": "1.2.0",
       "kind": "capability",
       "id": "document-optimizer",
       "displayName": "Document Optimizer",
@@ -564,11 +571,11 @@
       "artifacts": [
         {
           "id": "npm-package",
-          "kind": "npm",
           "identifier": "agent-tool-server-document-optimizer",
           "version": "0.0.0-development",
           "availability": "declared",
-          "reference": "server.json#/packages/0"
+          "reference": "server.json#/packages/0",
+          "kind": "npm"
         }
       ],
       "links": {
@@ -658,7 +665,7 @@
     },
     {
       "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
-      "schemaVersion": "1.1.0",
+      "schemaVersion": "1.2.0",
       "kind": "capability",
       "id": "git-optimizer",
       "displayName": "Git Optimizer",
@@ -675,11 +682,11 @@
       "artifacts": [
         {
           "id": "npm-package",
-          "kind": "npm",
           "identifier": "agent-tool-server-git-optimizer",
           "version": "0.1.0",
           "availability": "declared",
-          "reference": "server.json#/packages/0"
+          "reference": "server.json#/packages/0",
+          "kind": "npm"
         }
       ],
       "links": {
@@ -769,7 +776,7 @@
     },
     {
       "$schema": "https://raw.githubusercontent.com/ashergarland/agent-tool-platform/main/packages/capability-registry/schemas/v1/capability-entry.schema.json",
-      "schemaVersion": "1.1.0",
+      "schemaVersion": "1.2.0",
       "kind": "capability",
       "id": "vision",
       "displayName": "Vision",
@@ -786,11 +793,11 @@
       "artifacts": [
         {
           "id": "npm-package",
-          "kind": "npm",
           "identifier": "agent-tool-server-vision",
           "version": "0.0.0-development",
           "availability": "declared",
-          "reference": "server.json#/packages/0"
+          "reference": "server.json#/packages/0",
+          "kind": "npm"
         }
       ],
       "links": {
